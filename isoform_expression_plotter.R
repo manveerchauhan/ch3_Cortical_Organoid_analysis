@@ -34,12 +34,15 @@ get_isoforms_for_gene <- function(seu.obj, gene_symbol) {
 #' @param isoform_id Full isoform ID (e.g., "ENST00000335137.4-NRXN1")
 #' @param timepoint_label Label for timepoint (e.g., "1M", "3M", "6M")
 #' @return ggplot object
-plot_isoform_expression <- function(seu.obj, isoform_id, timepoint_label) {
+plot_isoform_expression <- function(seu.obj, isoform_id, timepoint_label,
+                                    identity_column = "consensus_cell_type") {
+  # Set default assay to iso to avoid warnings
+  DefaultAssay(seu.obj) <- "iso"
+
   # Extract expression data
   expr_data <- FetchData(seu.obj,
-                         vars = c(isoform_id, "cluster_annotations"),
-                         slot = "data",
-                         assay = "iso")
+                         vars = c(isoform_id, identity_column),
+                         layer = "data")
 
   colnames(expr_data) <- c("Expression", "CellType")
 
@@ -61,18 +64,21 @@ plot_isoform_expression <- function(seu.obj, isoform_id, timepoint_label) {
 
 #' Create UMAP feature plot for a single isoform
 #'
-#' @param seu.obj Seurat object with 'iso' assay and 'umap.harm' reduction
+#' @param seu.obj Seurat object with 'iso' assay and 'umap.harmony' reduction
 #' @param isoform_id Full isoform ID
 #' @param timepoint_label Label for timepoint
 #' @return ggplot object
 plot_isoform_umap <- function(seu.obj, isoform_id, timepoint_label) {
+  # Set default assay to iso to avoid warnings
+  DefaultAssay(seu.obj) <- "iso"
+
   # Get expression data to calculate max
-  expr_data <- FetchData(seu.obj, vars = isoform_id, slot = "data", assay = "iso")
+  expr_data <- FetchData(seu.obj, vars = isoform_id, layer = "data")
   maxExpr <- max(expr_data, na.rm = TRUE)
 
   p <- FeaturePlot(seu.obj,
                    features = isoform_id,
-                   reduction = "umap.harm",
+                   reduction = "umap.harmony",
                    order = TRUE,
                    pt.size = 0.5) +
     scale_colour_gradient(low = "lightgrey",

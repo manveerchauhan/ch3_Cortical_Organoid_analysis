@@ -1,0 +1,248 @@
+---
+site: workflowr::wflow_site
+title: "Add_isoform_counts"
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: textmate
+    code_folding: show
+---
+
+
+#Add isoform coutns to the obejct 
+
+```{r setup, include=FALSE}
+library(Seurat)
+library(dbplyr)
+library(Matrix)
+library(here)
+library(qs)
+library(tidyr)
+library(gridExtra)
+library(here)
+library(qs2)
+library(data.table)
+source(here("code","process_oarfish_files_to_counts_matrix.R"))
+```
+
+## R Markdown
+
+modify the script to remove all bambu genes. This will be done behind the scences in process_oarfish_files_to_counts_matrix
+
+```{r, echo=TRUE, eval=FALSE}
+# Example usage:
+# List of sample names
+sample_names <- c("C1_STC_matched_reads_dedup",
+                  "C4_STC_matched_reads_dedup",
+                  "C2_Day25_matched_reads_dedup",
+                  "C5_Day25_matched_reads_dedup",
+                  "C2_Day55_matched_reads_dedup",
+                  "C3_Day55_matched_reads_dedup",
+                  "C3_Day80_matched_reads_dedup",
+                  "C5_Day80_matched_reads_dedup"
+                  )
+
+# Loop through each sample and process the count files
+for (sample in sample_names) {
+  # Use tryCatch to handle errors
+  tryCatch({
+    # Call the function to process the sample
+    process_oarfish_files_to_counts_matrix(
+      sample_name = sample,
+      resource_table_path = here("output", "ref_file", "isoform_gene_dict.csv"),
+      output_dir = here("data","isoform_counts"),
+      input_dir = "/data/scratch/users/yairp/Kolf2.1_FLAMESv2/outs/Bambu_NDR_0.75",
+      filter_bambu_Genes = TRUE
+    )
+  }, error = function(e) {
+    # Print the error message and exit the loop
+    cat("Error processing sample:", sample, "\nError message:", e$message, "\nExiting loop.\n")
+    stop(e)
+  })
+}
+```
+
+## read in the CSV file and create a Seurat object
+```{r pressure, echo=TRUE}
+sample_names <- c("C1_STC",
+                  "C4_STC",
+                  "C2_Day25",
+                  "C5_Day25",
+                  "C2_Day55",
+                  "C3_Day55",
+                  "C3_Day80",
+                  "C5_Day80"
+                  )
+
+############ read in count matrix and add isoform assay to Seurat object  #########
+
+#Make Seurat objects not filtered
+# Function to read a CSV file and create a Seurat object
+create_seurat_object <- function(sample_name, input_dir, project_name) {
+  # Construct file path
+  file_path <- here(input_dir, paste0("gene_symbol_oarfish_", sample_name, ".csv"))
+  
+  # Read the CSV file
+  counts <- fread(file_path)
+  counts <- as.data.frame(counts) 
+  rownames(counts) <- counts[[1]]            # Set row names from the first column
+  counts[[1]] <- NULL     
+  
+  # Create the Seurat object
+  seurat_obj <- CreateSeuratObject(counts = counts, project = project_name, min.cells = 5, min.features = 500)
+  
+  return(seurat_obj)
+}
+
+# Directory where the CSV files are stored
+input_directory <- here("data", "isoform_counts")
+
+# Create an empty list to store Seurat objects
+iso_seurat_objects <- list()
+
+total_samples <- length(sample_names)
+for (i in seq_along(sample_names)) {
+  sample <- sample_names[i]
+  
+  message(sprintf("Processing sample %d of %d: %s", i, total_samples, sample))
+  
+  iso_seurat_objects[[sample]] <- create_seurat_object(
+    sample_name = sample,
+    input_dir = input_directory,
+    project_name = sample
+  )
+}
+
+####### Merge the samples into one object ######
+iso.merged_seurat <- merge(
+  iso_seurat_objects[["C1_STC"]],
+  y = list(
+    iso_seurat_objects[["C4_STC"]],
+    iso_seurat_objects[["C2_Day25"]],
+    iso_seurat_objects[["C5_Day25"]],
+    iso_seurat_objects[["C2_Day55"]],
+    iso_seurat_objects[["C3_Day55"]],
+    iso_seurat_objects[["C3_Day80"]],
+    iso_seurat_objects[["C5_Day80"]]
+  ),
+  add.cell.ids = c(
+    "C1_STC", "C4_STC", "C2_Day25", "C5_Day25",
+    "C2_Day55", "C3_Day55", "C3_Day80", "C5_Day80"
+  ), 
+  project = "FLAMESv2_Kolf2.1_NDR_0.75"
+  )
+
+# create a sample column
+iso.merged_seurat$sample <- rownames(iso.merged_seurat@meta.data)
+
+# split sample column to makw a batch col
+iso.merged_seurat@meta.data <- separate(iso.merged_seurat@meta.data, col = 'sample', into = c('batch', 'Day', 'Barcode'), 
+                                    sep = '_')
+
+
+qs_path <- here("output", "seurat_objects", "seurat_filt_harm_annotated.qs")
+obj <- qs2::qs_read(qs_path) 
+
+## filter the data to iso and gene cells match
+merged_seurat_isoform_filtered <- subset(iso.merged_seurat, cells =obj@graphs[["RNA_nn"]]@Dimnames[[1]])
+
+VlnPlot(merged_seurat_isoform_filtered, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# perform standard workflow steps
+merged_seurat_isoform_filtered <- NormalizeData(object = merged_seurat_isoform_filtered) 
+merged_seurat_isoform_filtered <- FindVariableFeatures(object = merged_seurat_isoform_filtered)
+merged_seurat_isoform_filtered <- ScaleData(object = merged_seurat_isoform_filtered)
+merged_seurat_isoform_filtered <- RunPCA(object = merged_seurat_isoform_filtered)
+ElbowPlot(merged_seurat_isoform_filtered)
+merged_seurat_isoform_filtered <- FindNeighbors(object = merged_seurat_isoform_filtered, dims = 1:10)
+merged_seurat_isoform_filtered <- FindClusters(object = merged_seurat_isoform_filtered, resolution = 0.6)
+merged_seurat_isoform_filtered <- RunUMAP(object = merged_seurat_isoform_filtered, dims = 1:10)
+
+#Save file
+#saveRDS(merged_seurat_isoform_filtered, file = "./output_files/mutli_sample/merged_seurat_isoform_filtered.rds")
+
+```
+
+
+
+```{r}
+
+merged_seurat_isoform_filtered <- readRDS(file = "./output_files/mutli_sample/merged_seurat_isoform_filtered.rds")
+
+#plots
+p5 <- DimPlot(merged_seurat_isoform_filtered, reduction = 'umap', group.by = 'orig.ident')
+p6 <- DimPlot(merged_seurat_isoform_filtered, reduction = 'umap', group.by = 'Day')
+p7 <- FeaturePlot(merged_seurat_isoform_filtered, reduction = 'umap', features = 'nCount_RNA')
+p8 <- FeaturePlot(merged_seurat_isoform_filtered, reduction = "umap", features = 'nFeature_RNA')
+
+grid.arrange(p5, p6, p7, p8, ncol = 2)
+
+
+```
+
+
+```{r}
+merged_seurat_isoform_filtered <- JoinLayers(merged_seurat_isoform_filtered)
+counts_table <- merged_seurat_isoform_filtered[["RNA"]]$counts
+
+obj[["iso"]] <- CreateAssay5Object(counts = counts_table)
+
+# Step 1: Normalize the new assay data
+obj <- NormalizeData(obj, assay = "iso")
+obj <- FindVariableFeatures(obj, assay = "iso")
+obj <- ScaleData(obj, assay = "iso")
+
+# Step 4: Perform PCA
+obj <- RunPCA(obj, assay = "iso", reduction.name = "pca_iso")
+
+
+# Step 5: Run UMAP
+obj <- RunUMAP(obj, reduction = "pca_iso", dims = 1:15, assay = "iso", reduction.name = "umap_iso")
+
+
+### intergrate iso layers if you want 
+# 1) split your iso counts into separate layers by orig.ident
+obj[["iso"]] <- split(obj[["iso"]], f = obj$orig.ident)
+
+# 2) preprocess as usual (will run on every layer automatically)
+obj <- NormalizeData(obj, assay = "iso")
+obj <- FindVariableFeatures(obj, assay = "iso")
+obj <- ScaleData(obj, assay = "iso")
+obj <- RunPCA(obj, assay = "iso", reduction.name = "pca_iso")
+
+# 3) now IntegrateLayers will pick up those layers as the grouping
+obj <- IntegrateLayers(
+  object         = obj,
+  assay          = "iso",
+  method         = HarmonyIntegration,
+  orig.reduction  = "pca_iso",
+  new.reduction   = "harmony_iso",
+  verbose        = FALSE
+)
+
+# 4) project with UMAP on your harmonized dims
+obj <- RunUMAP(obj,
+               reduction      = "harmony_iso",
+               dims           = 1:15,
+               reduction.name = "umap.harm_iso")
+
+
+# Visualize the UMAP
+DimPlot(obj, label = TRUE, reduction = "umap_iso", group.by = "IntermediateType") | DimPlot(obj, label = TRUE, reduction = "umap.harm", group.by = "IntermediateType") | DimPlot(obj, reduction = "umap.harm_iso", label = TRUE, group.by = "IntermediateType")
+```
+
+
+```{r}
+# save the iso assay also 
+
+  qs2::qs_save(
+    obj,
+    file   = here("output", "seurat_objects", "seurat_filt_harm_annotated_iso.qs"))
+
+
+# save in RDS format for Maria
+saveRDS(obj, file   = here("output", "seurat_objects", "seurat_filt_harm_annotated_iso.rds"))
+
+```

@@ -1,0 +1,95 @@
+# Neurodevelopmental Models Analysis - Git Ignore File
+# Created for Manveer Chauhan's neurodevelopmental analysis project
+
+# ========================================
+# R/Seurat Large Data Files
+# ========================================
+
+# All RDS files (Seurat objects and intermediate data)
+*.rds
+
+# ========================================
+# Large CSV Count Matrices
+# ========================================
+
+# Gene count matrices
+*_counts.csv
+gene_symbol_*_counts.csv
+*_gene_counts.csv
+*_transcript_counts.csv
+
+# Count directories
+draft_space/output_files/counts/
+Org_Timeseries_Analysis/previous_raw_data/gene_counts/
+Org_Timeseries_Analysis/previous_raw_data/isoform_counts/
+
+# ========================================
+# R Cache and Temporary Files
+# ========================================
+
+# R cache directories
+*_cache/
+geneQC_cache/
+
+# R temporary files
+.Rhistory
+.RData
+.Rproj.user
+.Rproj
+*~
+.DS_Store
+
+# ========================================
+# Large Reference/Database Files
+# ========================================
+
+# Large Excel reference files
+Bhattacharya2023*.xlsx
+
+# ========================================
+# System Files
+# ========================================
+
+# Mac OS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.directory
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ========================================
+# IDE/Editor Files
+# ========================================
+
+# RStudio
+.Rproj.user/
+
+# VS Code
+.vscode/
+
+# Vim
+*.swp
+*.swo
+*~
+
+# ========================================
+# Optional: Keep these patterns commented out for now
+# Uncomment if you want to exclude additional files
+# ========================================
+
+# All CSV files (if you want to exclude all CSVs)
+# *.csv
+
+# All Excel files (if you want to exclude all Excel)
+# *.xlsx
+# *.xls
+
+# All PDF files (currently we're keeping PDFs)
+# *.pdf

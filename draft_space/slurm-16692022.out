@@ -1,0 +1,288 @@
+
+Modules based on Lua: Version 8.7.65 2025-08-05 10:24 -06:00
+    by Robert McLay mclay@tacc.utexas.edu
+
+module [options] sub-command [args ...]
+
+Help sub-commands:
+
+
+  help                              prints this message
+  help                module [...]  print help message from module(s)
+
+Loading/Unloading sub-commands:
+
+
+  load | add          module [...]  load module(s)
+  try-load | try-add  module [...]  Add module(s), do not complain if not
+                                    found
+  del | unload        module [...]  Remove module(s), do not complain if not
+                                    found
+  swap | sw | switch  m1 m2         unload m1 and load m2
+  purge                             unload all modules
+  refresh                           reload aliases from current list of
+                                    modules.
+  update                            reload all currently loaded modules.
+
+Listing / Searching sub-commands:
+
+
+  list                              List loaded modules
+  list                s1 s2 ...     List loaded modules that match the
+                                    pattern
+  avail | av                        List available modules
+  avail | av          string        List available modules that contain
+                                    "string".
+  category | cat                    List all categories
+  category | cat      s1 s2 ...     List all categories that match the
+                                    pattern and display their modules
+  overview | ov                     List all available modules by short
+                                    names with number of versions
+  overview | ov       string        List available modules by short names
+                                    with number of versions that contain
+                                    "string"
+  spider                            List all possible modules
+  spider              module        List all possible version of that module
+                                    file
+  spider              string        List all module that contain the
+                                    "string".
+  spider              name/version  Detailed information about that version
+                                    of the module.
+  whatis              module        Print whatis information about module
+  keyword | key       string        Search all name and whatis that contain
+                                    "string".
+
+Searching with Lmod:
+
+
+  All searching (spider, list, avail, keyword) support regular expressions:
+  
+
+  -r spider           '^p'          Finds all the modules that start with
+                                    `p' or `P'
+  -r spider           mpi           Finds all modules that have "mpi" in
+                                    their name.
+  -r spider           'mpi$         Finds all modules that end with "mpi" in
+                                    their name.
+
+Handling a collection of modules:
+
+
+  save | s                          Save the current list of modules to a
+                                    user defined "default" collection.
+  save | s            name          Save the current list of modules to
+                                    "name" collection.
+  reset                             The same as "restore system"
+  restore | r                       Restore modules from the user's
+                                    "default" or system default.
+  restore | r         name          Restore modules from "name" collection.
+  restore             system        Restore module state to system defaults.
+  savelist                          List of saved collections.
+  describe | mcc      name          Describe the contents of a module
+                                    collection.
+  disable             name          Disable (i.e. remove) a collection.
+
+Deprecated commands:
+
+
+  getdefault          [name]        load name collection of modules or
+                                    user's "default" if no name given.
+                                    ===> Use "restore" instead <====
+  setdefault          [name]        Save current list of modules to name if
+                                    given, otherwise save as the default
+                                    list for you the user.
+                                    ===> Use "save" instead. <====
+
+Miscellaneous sub-commands:
+
+
+  is-loaded           modulefile    return a true status if module is loaded
+  is-avail            modulefile    return a true status if module can be
+                                    loaded
+  show                modulefile    show the commands in the module file.
+  use [-a]            path          Prepend or Append path to MODULEPATH.
+  unuse               path          remove path from MODULEPATH.
+  tablelist                         output list of active modules as a lua
+                                    table.
+
+Important Environment Variables:
+
+
+  LMOD_COLORIZE                     If defined to be "YES" then Lmod prints
+                                    properties and warning in color.
+
+
+Lmod Web Sites
+
+  Documentation:    https://lmod.readthedocs.org
+  GitHub:           https://github.com/TACC/Lmod
+  SourceForge:      https://lmod.sf.net
+  TACC Homepage:    https://www.tacc.utexas.edu/research-development/tacc-projects/lmod
+
+  To report a bug please read https://lmod.readthedocs.io/en/latest/075_bug_reporting.html
+
+Loading required package: SeuratObject
+Loading required package: sp
+
+Attaching package: ‘SeuratObject’
+
+The following objects are masked from ‘package:base’:
+
+    %||%, intersect, t
+
+
+Attaching package: ‘Seurat’
+
+The following object is masked from ‘package:base’:
+
+    %||%
+
+── Attaching core tidyverse packages ──────────────────────── tidyverse 2.0.0 ──
+✔ dplyr     1.1.4     ✔ readr     2.1.5
+✔ forcats   1.0.0     ✔ stringr   1.5.0
+✔ ggplot2   3.5.1     ✔ tibble    3.2.1
+✔ lubridate 1.9.4     ✔ tidyr     1.3.1
+✔ purrr     1.0.2     
+── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
+✖ purrr::%||%()   masks Seurat::%||%(), SeuratObject::%||%(), base::%||%()
+✖ tidyr::expand() masks Matrix::expand()
+✖ dplyr::filter() masks stats::filter()
+✖ dplyr::lag()    masks stats::lag()
+✖ tidyr::pack()   masks Matrix::pack()
+✖ tidyr::unpack() masks Matrix::unpack()
+ℹ Use the conflicted package (<http://conflicted.r-lib.org/>) to force all conflicts to become errors
+
+========================================
+Starting sequential processing of all samples...
+========================================
+
+=== Processing sample 1 of 8 : org_1A ===
+Creating gene-level Seurat object...
+An object of class Seurat 
+42431 features across 1398 samples within 1 assay 
+Active assay: RNA (42431 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_1A_gene_seurat.rds 
+Creating isoform-level Seurat object...
+Warning: Feature names cannot have underscores ('_'), replacing with dashes ('-')
+An object of class Seurat 
+195256 features across 1398 samples within 1 assay 
+Active assay: isoform (195256 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_1A_isoform_seurat.rds 
+
+=== Processing sample 2 of 8 : org_1B ===
+Creating gene-level Seurat object...
+An object of class Seurat 
+42332 features across 2716 samples within 1 assay 
+Active assay: RNA (42332 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_1B_gene_seurat.rds 
+Creating isoform-level Seurat object...
+Warning: Feature names cannot have underscores ('_'), replacing with dashes ('-')
+An object of class Seurat 
+198486 features across 2716 samples within 1 assay 
+Active assay: isoform (198486 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_1B_isoform_seurat.rds 
+
+=== Processing sample 3 of 8 : org_3A ===
+Creating gene-level Seurat object...
+An object of class Seurat 
+41616 features across 1359 samples within 1 assay 
+Active assay: RNA (41616 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_3A_gene_seurat.rds 
+Creating isoform-level Seurat object...
+Warning: Feature names cannot have underscores ('_'), replacing with dashes ('-')
+An object of class Seurat 
+187739 features across 1359 samples within 1 assay 
+Active assay: isoform (187739 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_3A_isoform_seurat.rds 
+
+=== Processing sample 4 of 8 : org_3B ===
+Creating gene-level Seurat object...
+An object of class Seurat 
+42892 features across 1555 samples within 1 assay 
+Active assay: RNA (42892 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_3B_gene_seurat.rds 
+Creating isoform-level Seurat object...
+Warning: Feature names cannot have underscores ('_'), replacing with dashes ('-')
+An object of class Seurat 
+195454 features across 1555 samples within 1 assay 
+Active assay: isoform (195454 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_3B_isoform_seurat.rds 
+
+=== Processing sample 5 of 8 : org_3C ===
+Creating gene-level Seurat object...
+An object of class Seurat 
+44412 features across 2504 samples within 1 assay 
+Active assay: RNA (44412 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_3C_gene_seurat.rds 
+Creating isoform-level Seurat object...
+Warning: Feature names cannot have underscores ('_'), replacing with dashes ('-')
+An object of class Seurat 
+203828 features across 2504 samples within 1 assay 
+Active assay: isoform (203828 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_3C_isoform_seurat.rds 
+
+=== Processing sample 6 of 8 : org_6A ===
+Creating gene-level Seurat object...
+An object of class Seurat 
+37861 features across 668 samples within 1 assay 
+Active assay: RNA (37861 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_6A_gene_seurat.rds 
+Creating isoform-level Seurat object...
+Warning: Feature names cannot have underscores ('_'), replacing with dashes ('-')
+An object of class Seurat 
+175561 features across 668 samples within 1 assay 
+Active assay: isoform (175561 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_6A_isoform_seurat.rds 
+
+=== Processing sample 7 of 8 : org_6B ===
+Creating gene-level Seurat object...
+An object of class Seurat 
+42303 features across 1331 samples within 1 assay 
+Active assay: RNA (42303 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_6B_gene_seurat.rds 
+Creating isoform-level Seurat object...
+Warning: Feature names cannot have underscores ('_'), replacing with dashes ('-')
+An object of class Seurat 
+199602 features across 1331 samples within 1 assay 
+Active assay: isoform (199602 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_6B_isoform_seurat.rds 
+
+=== Processing sample 8 of 8 : org_6C ===
+Creating gene-level Seurat object...
+An object of class Seurat 
+40115 features across 1274 samples within 1 assay 
+Active assay: RNA (40115 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_6C_gene_seurat.rds 
+Creating isoform-level Seurat object...
+Warning: Feature names cannot have underscores ('_'), replacing with dashes ('-')
+An object of class Seurat 
+189564 features across 1274 samples within 1 assay 
+Active assay: isoform (189564 features, 0 variable features)
+ 1 layer present: counts
+Saved: ./output_files/seu_objects/org_6C_isoform_seurat.rds 
+
+========================================
+=== All samples processed successfully! ===
+========================================
+Processed samples: org_1A, org_1B, org_3A, org_3B, org_3C, org_6A, org_6B, org_6C 
+
+Seurat objects saved in: ./output_files/seu_objects/
+
+To load a specific object:
+  gene_seu <- readRDS('./output_files/seu_objects/org_1A_gene_seurat.rds')
+  iso_seu <- readRDS('./output_files/seu_objects/org_1A_isoform_seurat.rds')

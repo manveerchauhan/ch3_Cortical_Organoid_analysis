@@ -1,0 +1,517 @@
+---
+site: workflowr::wflow_site
+title: "traj"
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: textmate
+    code_folding: show
+---
+
+```{r setup, include=FALSE, message=FALSE}
+library("here")
+library("qs2")
+library(Seurat)
+library("dplyr")
+
+```
+
+```{r, include=FALSE}
+obj <- qs2::qs_read(here("output","seurat_objects", "seurat_filt_harm_annotated_iso.qs"))
+obj <- JoinLayers(obj)
+```
+
+```{r}
+DimPlot(obj, reduction = "umap.harm", group.by = "orig.ident", split.by = "orig.ident")
+
+```
+
+```{r traj_gene}
+source(here("code","trajectory_analysis.R"))
+### add this to a new script but lets check the trajectory and makers
+ perform_trajectory_analysis(seurat_obj = obj, "RNA", prefix = "FLAMESv2_Kolf2.1_NDR_0.75",
+                            cluster_name="Day",  root_cells = NULL, cores = 8, order_features_by_pseudotime = TRUE, number_of_features = 5000)
+ 
+```
+
+```{r traj_iso}
+
+
+ perform_trajectory_analysis(seurat_obj = obj, "iso", prefix = "iso_FLAMESv2_Kolf2.1_NDR_0.75",
+                            cluster_name="IntermediateType",  root_cells = NULL, cores = 8, order_features_by_pseudotime = TRUE, number_of_features = 10000)
+ 
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+
+library(dittoSeq)
+
+#list_of_genes <- c("VIM", "MAPT", "KLC1", "RBFOX1", "RBFOX3")
+DefaultAssay(obj) <- "iso"
+
+obj_pseudo <- qs2::qs_read(here("output","traj", "FLAMESv2_Kolf2.1_NDR_0.75_seurat_with_pseudotime.qs"))
+
+cds <- qs2::qs_read(here("output","traj", "FLAMESv2_Kolf2.1_NDR_0.75_cds_with_pseudotime.qs"))
+
+read.csv("../output/traj/FLAMESv2_Kolf2.1_NDR_0.75_sig_genes_pseudotime.csv") -> sig_iso_MI
+DefaultAssay(obj_pseudo) <- "iso"
+obj_pseudo <- JoinLayers(obj_pseudo)
+
+pdf(here("output", "traj", "pseudoheatmap.pdf"), height = 20, width = 8)
+dittoHeatmap(
+  obj_pseudo,
+  sig_iso_MI$gene_short_name,
+  scaled.to.max = FALSE,
+  complex = FALSE,
+  heatmap.colors.max.scaled = TRUE,
+  annot.by = c("pseudotime")
+)
+dev.off()
+
+
+# Ensure metadata consistency
+obj_pseudo$Day <- factor(obj_pseudo$Day)
+obj_pseudo$Day <- factor(obj_pseudo$Day, levels = c("STC", "Day25", "Day55", "Day80"))
+
+# Plot 1 — Monocle pseudotime with trajectory
+p1 <- plot_cells(
+  cds,
+  color_cells_by = "pseudotime",
+  show_trajectory_graph = TRUE,
+  label_groups_by_cluster = FALSE,
+  label_leaves = FALSE,
+  label_branch_points = FALSE,
+  graph_label_size = 0,                       # hides any graph labels
+  trajectory_graph_color = "red",
+  trajectory_graph_segment_size = 0.5         # ← makes the trajectory line thicker
+) +
+  theme_void() +
+  theme(
+    legend.position = "right",          # hides numeric labels
+    legend.title = element_text(size = 12)
+  ) 
+
+
+
+# Plot 2 — Seurat UMAP colored by Day
+# Ensure correct order
+obj_pseudo$Day <- factor(obj_pseudo$Day, levels = c("STC", "Day25", "Day55", "Day80"))
+# Get default ditto color palette (dark pastels, publication-ready)
+day_colors <- dittoColors()[5:9]  # Select 4 colors for STC, Day25, Day55, Day80
+names(day_colors) <- c("STC", "Day25", "Day55", "Day80")
+# Ensure correct Day order
+obj_pseudo$Day <- factor(obj_pseudo$Day, levels = c("STC", "Day25", "Day55", "Day80"))
+timepoint_colors <- c(
+  "STC"    = "#66c2a5",
+  "Day25"  = "#fc8d62",
+  "Day55"  = "#8da0cb",
+  "Day80"  = "#e78ac3"
+)
+
+# Plot
+p2 <- DimPlot(
+  obj_pseudo,
+  reduction = "umap.harm",
+  group.by = "Day",
+  pt.size = 0.1
+) +
+  scale_color_manual(values = timepoint_colors) +
+  theme_void() +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+
+
+library(patchwork)
+
+pdf(here("output/publication_figure/traj_plot.pdf"), width = 8, height = 4)
+# Combine with patchwork
+combined_plot <- p1 + p2 + plot_layout(ncol = 2, widths = c(1, 1))
+combined_plot
+dev.off()
+
+pdf(here("output/publication_figure/multi_celltypes_broad_plot.pdf"), width = 6, height = 4)
+DimPlot(
+  obj_pseudo,
+  reduction = "umap.harm",
+  group.by = "BroadType",
+  pt.size = 0.1
+) +
+  #scale_color_manual(values = simple_colors) +
+  theme_void() +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+dev.off()
+
+```
+
+```{r}
+
+cds_subset <- qs2::qs_read(here("output","traj", "iso_FLAMESv2_Kolf2.1_NDR_0.75_cds_subset_with_pseudotime.qs"))
+MI <- read.csv(here("output","traj", "iso_FLAMESv2_Kolf2.1_NDR_0.75_sig_genes_pseudotime.csv"))
+my_genes <- head(sig_iso_MI$gene_short_name)
+
+top_mi <- MI %>%
+  arrange(desc(morans_I)) %>%
+  slice_head(n = 5)
+
+cds_top_genes <- cds_subset[top_mi$gene_short_name,]
+
+cds_top_genes <- cds_subset[c("ENST00000544301.7-VIM", "ENST00000613865.5-RPS24", "ENST00000259915.13-POU5F1", "ENST00000218230.6-PCSK1N", "ENST00000329305.6-TPM2"),]
+#cds_top_genes <- cds_subset[c("ENST00000613865.5-RPS24"),]
+monocle3::plot_genes_in_pseudotime(cds = cds_top_genes, min_expr = 10, cell_size = 0.1,
+                                                       nrow = NULL, ncol = 2, panel_order = NULL,
+                                                       label_by_short_name = TRUE, color_cells_by = "Day")
+
+
+
+DefaultAssay(obj_pseudo) <- "iso"
+# Step 1: Extract all isoforms for the gene of interest (e.g., VIM)
+gene_of_interest <- "HOPX"
+isoform_names <- grep(paste0("-", gene_of_interest, "$"), rownames(obj_pseudo[["iso"]]), value = TRUE)
+
+# Step 2: Fetch expression and metadata
+df <- FetchData(obj_pseudo, vars = c(isoform_names, "pseudotime", "BroadType", "Day", "IntermediateType")) %>%
+  pivot_longer(cols = all_of(isoform_names), names_to = "isoform", values_to = "expression")
+
+# Step 3: Plot
+ggplot(df, aes(x = pseudotime, y = expression)) +
+  geom_point(aes(color = IntermediateType), alpha = 0.6, size = 0.8) +
+  geom_smooth(color = "black", se = FALSE, linewidth = 0.8) +
+  facet_wrap(~ isoform, scales = "free_y") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    strip.text = element_text(face = "bold", size = 10),
+    axis.title = element_text(face = "bold"),
+    legend.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    title = paste0("Isoform Expression of ", gene_of_interest, " across Pseudotime"),
+    x = "Pseudotime",
+    y = "Normalized Expression",
+    color = "BroadType"
+  )
+
+
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(scico)
+
+# Extract metadata
+meta <- obj_pseudo@meta.data
+
+# Count cells per BroadType per sample
+cell_counts <- meta %>%
+  dplyr::count(orig.ident, IntermediateType)
+
+# Calculate proportions
+cell_props <- cell_counts %>%
+  group_by(orig.ident) %>%
+  mutate(prop = n / sum(n)) %>%
+  ungroup()
+
+# Clean & order sample labels
+cell_props$Sample <- gsub("_", "-", cell_props$orig.ident)
+
+# Assign stage labels to order samples
+cell_props <- cell_props %>%
+  mutate(stage = case_when(
+    grepl("STC", Sample)    ~ "0_STC",
+    grepl("Day25", Sample)  ~ "1_Day25",
+    grepl("Day55", Sample)  ~ "2_Day55",
+    grepl("Day80", Sample)  ~ "3_Day80",
+    TRUE                    ~ "Z_Other"
+  ))
+
+# Order Sample factor by stage
+sample_levels <- cell_props %>%
+  distinct(Sample, stage) %>%
+  arrange(stage) %>%
+  pull(Sample)
+
+cell_props$Sample <- factor(cell_props$Sample, levels = sample_levels)
+
+# Plot
+pdf(here("output/publication_figure/cell_type_barplot.pdf"), width = 8, height = 4) 
+ggplot(cell_props, aes(x = Sample, y = prop, fill = IntermediateType)) +
+  geom_bar(stat = "identity", width = 0.8) +
+  coord_flip() +
+  #scale_fill_scico_d(palette = "berlin") +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.y = element_text(face = "bold"),
+    axis.text.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold"),
+    axis.title.x = element_text(face = "bold"),
+    legend.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    x = "Sample",
+    y = "Cell Type Proportion",
+    fill = "Cell Type",
+    title = "Cell Type Composition Across Samples"
+  )
+dev.off()
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Extract metadata
+meta <- obj_pseudo@meta.data
+
+# Count total cells per sample
+cell_counts <- meta %>%
+  dplyr::count(orig.ident) %>%
+  dplyr::rename(CellCount = n)
+
+# Clean sample labels
+cell_counts$Sample <- gsub("_", "-", cell_counts$orig.ident)
+
+# Assign timepoint/stage labels
+cell_counts <- cell_counts %>%
+  mutate(stage = case_when(
+    grepl("STC", Sample)    ~ "0_STC",
+    grepl("Day25", Sample)  ~ "1_Day25",
+    grepl("Day55", Sample)  ~ "2_Day55",
+    grepl("Day80", Sample)  ~ "3_Day80",
+    TRUE                    ~ "Z_Other"
+  ))
+
+# Order sample factor by stage
+sample_levels <- cell_counts %>%
+  distinct(Sample, stage) %>%
+  arrange(stage) %>%
+  pull(Sample)
+
+cell_counts$Sample <- factor(cell_counts$Sample, levels = sample_levels)
+
+# Plot total cell counts
+pdf(here("output/publication_figure/cell_numbers_plot.pdf"), width = 8, height = 4)
+ggplot(cell_counts, aes(x = Sample, y = CellCount, fill = stage)) +
+  geom_bar(stat = "identity", width = 0.8) +
+  coord_flip() +
+  scale_fill_brewer(palette = "Set2") +  # Optional: use scico/viridis
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.y = element_text(face = "bold"),
+    axis.text.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold"),
+    axis.title.x = element_text(face = "bold"),
+    legend.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    x = "Sample",
+    y = "Number of Cells",
+    fill = "Timepoint",
+    title = "Total Number of Cells per Sample"
+  )
+dev.off()
+
+
+```
+
+```{r}
+
+library(Seurat)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+DefaultAssay(obj_pseudo) <- "iso"
+
+# Step 1: Extract isoform matrix and pseudotime
+mat <- GetAssayData(obj_pseudo, slot = "data")  # or "counts"
+pseudotime <- obj_pseudo$pseudotime
+
+# Step 2: Correlate each isoform with pseudotime
+cors <- apply(mat, 1, function(x) cor(x, pseudotime, method = "spearman", use = "pairwise.complete.obs"))
+
+trend_df <- data.frame(
+  isoform = rownames(mat),
+  cor = cors
+) %>%
+  mutate(trend = case_when(
+    cor >=  0.3 ~ "Up",
+    cor <= -0.3 ~ "Down",
+    TRUE        ~ "Flat"
+  ))
+
+# View top results
+head(trend_df)
+
+top_up   <- trend_df %>% filter(trend == "Up")   %>% arrange(-cor) %>% slice_head(n = 3)
+top_down <- trend_df %>% filter(trend == "Down") %>% arrange(cor)  %>% slice_head(n = 3)
+
+top_isoforms <- c(top_up$isoform, top_down$isoform)
+
+# Extract and reshape for plotting
+df <- FetchData(obj_pseudo, vars = c(top_isoforms, "pseudotime", "BroadType", "IntermediateType", "Day")) %>%
+  pivot_longer(cols = all_of(top_isoforms), names_to = "isoform", values_to = "expression")
+
+# Add trend labels
+df <- df %>%
+  left_join(trend_df, by = "isoform") %>%
+  mutate(isoform = factor(isoform, levels = unique(isoform[order(trend, -abs(cor))])))
+
+df$IntermediateType <- factor(
+  df$IntermediateType,
+  levels = c(
+    "Stem cells",
+    "RG (cycling)",
+    "RG (non‐cycling)",
+    "oRG",
+    "Glial progenitor",
+    "Excitatory intermediate progenitor",
+    "Developing interneuron",
+    "Post-mitotic interneuron",
+    "Immature inhibitory neuron",
+    "Mixed inhibitory/excitatory",
+    "Mature inhibitory neuron",
+    "Excitatory neurons"
+  )
+)
+
+# Plot
+plot_up_dowm <-ggplot(df, aes(x = pseudotime, y = expression)) +
+  geom_point(aes(color = BroadType), alpha = 0.4, size = 0.6) +
+  geom_smooth(color = "black", se = FALSE, linewidth = 0.7) +
+  facet_wrap(~ isoform, scales = "free_y", ncol = 2) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "Top Isoforms Up and Down in Pseudotime",
+    x = "Pseudotime", y = "Expression") +
+  theme(
+    legend.position = "bottom"
+  )
+
+
+plot_up_dowm
+
+pdf(here("output/publication_figure/up_dowm_pseudo.pdf"), width = 8, height = 4)
+plot_up_dowm
+dev.off()
+```
+
+```{r}
+Idents(obj) <- "IntermediateType"
+all_markers <- FindAllMarkers(
+    obj,
+    assay = "RNA",
+    only.pos = TRUE,
+    logfc.threshold = 0.25)
+
+# Get top 10 per cluster
+top10 <- all_markers %>%
+  group_by(cluster) %>%
+  top_n(n = 10, wt = avg_log2FC)
+
+DoHeatmap(
+  object = obj)
+    
+```
+
+```{r}
+# Im going to upadte the annaotion catergory to be a bit more publication friendly    
+obj <- qs2::qs_read(here("output","traj", "FLAMESv2_Kolf2.1_NDR_0.75_seurat_with_pseudotime.qs"))
+
+
+
+DimPlot(obj, reduction = "umap.harm")
+
+obj <- FindSubCluster(object = obj, cluster = 11, resolution = 0.1, graph.name = "RNA_snn", subcluster.name = "clsuter_11")
+
+DimPlot(obj, reduction = "umap.harm", group.by = "sub.cluster", label = T)
+Idents(obj) <- "sub.cluster"
+all_markers_sub.cluster <- FindAllMarkers(obj, only.pos = T, logfc.threshold = 1)
+
+top10_cluster11_1 <- all_markers_sub.cluster %>%
+  filter(cluster == "11_0") %>%      # subset to cluster 11_1
+  arrange(p_val_adj) %>%             # order by adjusted p-value
+  slice_head(n = 100)                 # take top 10
+
+top10_cluster11_1
+
+# Compare cluster 11 vs cluster 2
+cluster11_vs_2 <- FindMarkers(
+  object = obj,
+  ident.1 = "11_0",
+  ident.2 = "2",
+  assay = "RNA",          # or "SCT" depending on your workflow
+  slot = "data",          # or "counts" if you want raw
+  logfc.threshold = 0.25, # change if you want stricter/laxer
+  min.pct = 0.1
+)
+
+# View the top results
+head(cluster11_vs_2, 20)
+
+
+early_msn   <- c("MEIS2","ISL1","EBF1","NNAT","STMN2","TUBB2A","TUBB3")
+mature_msn  <- c("BCL11B","PPP1R1B","FOXP1","GPR88","PDE10A",
+                 "AUTS2","NRXN3","GRIP1","ROBO2","DSCAML1","CACNA1C","GPHN")
+
+seurat_obj <- AddModuleScore(obj, features=list(early_msn),  name="EarlyMSN")
+seurat_obj <- AddModuleScore(obj, features=list(mature_msn), name="MatureMSN")
+
+VlnPlot(seurat_obj, features=c("EarlyMSN1","MatureMSN1"), group.by="seurat_clusters", pt.size=0)
+
+DotPlot(seurat_obj, group.by="seurat_clusters",
+        features=c(early_msn, mature_msn, c("DRD1","TAC1","PDYN","DRD2","ADORA2A","PENK"))) + RotatedAxis()
+
+```
+
+```{r}
+# Define mapping
+cluster_map <- c(
+  "1"    = "Stem cells",
+  "7"    = "Stem cells",
+  "3"    = "RG (non-cycling)",
+  "5"    = "RG (cycling)",
+  "12"   = "oRG",
+  "11_0" = "Unknown 1",
+  "11_1" = "Unknown 2",
+  "0"    = "Mature IN",
+  "6"    = "Mature IN",
+  "14"   = "Mature IN",
+  "4"    = "Mature IN",
+  "8"    = "Mature IN",
+  "2"    = "Newborn IN",
+  "9"    = "IN progenitors",
+  "10"   = "LGE progenitors",
+  "13" = "IPCs"
+)
+
+# Create new metadata column
+obj$publication_clusters <- plyr::mapvalues(
+  x = obj$sub.cluster,
+  from = names(cluster_map),
+  to   = as.vector(cluster_map)
+)
+
+# Visualize
+DimPlot(obj, reduction = "umap.harm", group.by = "publication_clusters", label = TRUE)
+
+```

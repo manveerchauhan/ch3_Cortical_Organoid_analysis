@@ -1,0 +1,378 @@
+---
+title: "novel_exons"
+author: "Sefi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#How many novel exons do we find? 
+library(here)
+library(rtracklayer)
+library(GenomicRanges)
+library(dplyr)
+merged_df <- read.csv(here("output/SQANTI_outs/SQANTI_data_merged_df.csv"))  
+  
+```
+
+#How many novel exons do we find? 
+
+simpe def of novel exon. Must not overlap with ref gtf. (in theory novel exon contianed with a large retained ontron would  not be novelunder this def.)
+```{r}
+#–– 1) build your full novel‐exon table ––#
+get_novel_exon_table <- function(ref_gtf, qry_gtf, exon.type = "exon") {
+  # import
+  ref  <- import(ref_gtf);      ref_exons <- ref[ref$type == exon.type]
+  qry  <- import(qry_gtf);      qry_exons <- qry[qry$type == exon.type]
+  
+  # union of known
+  ref_union <- reduce(ref_exons)
+  
+  # pick novel query exons (no overlap with known union)
+  novel_idx    <- which(!overlapsAny(qry_exons, ref_union))
+  novel_exons  <- qry_exons[novel_idx]
+  
+  # build df of each interval + its gene & transcript
+  df <- data.frame(
+    seqnames      = as.character(seqnames(novel_exons)),
+    start         = start(novel_exons),
+    end           = end(novel_exons),
+    strand        = as.character(strand(novel_exons)),
+    gene_id       = mcols(novel_exons)$gene_id,
+    transcript_id = mcols(novel_exons)$transcript_id,
+    stringsAsFactors = FALSE
+  )
+  
+  df %>%
+    group_by(seqnames, start, end, strand) %>%
+    summarise(
+      gene_id       = paste(unique(gene_id), collapse=";"),
+      transcript_id = paste(unique(transcript_id), collapse=";"),
+      .groups = "drop"
+    ) %>%
+    as.data.frame()
+}
+
+#–– 2) count simply delegates to the table function ––#
+count_novel_exons <- function(ref_gtf, qry_gtf, exon.type = "exon") {
+  novel_table <- get_novel_exon_table(ref_gtf, qry_gtf, exon.type)
+  nrow(novel_table)
+}
+
+# —— example usage —— #
+ref_gtf <- "/data/scratch/users/yairp/FLAMES_Day55/resources/gencode.v47.annotation.gtf"
+qry_gtf <- here("output","ref_file","filtered_for_sqanti.gtf")
+
+# get table
+novel_exon_table <- get_novel_exon_table(ref_gtf, qry_gtf)
+# get count
+n_count <- count_novel_exons(ref_gtf, qry_gtf)
+
+# verify they match:
+stopifnot(n_count == nrow(novel_exon_table))
+
+# print out
+cat("Found", n_count, "unique novel exon loci.\n")
+head(novel_exon_table)
+
+
+```
+
+## R plots of novel exons
+
+
+```{r plots}
+# 2) Explode the gene_id and transcript_id columns
+novel_iso  <- novel_exon_table %>% separate_rows(transcript_id, sep = ";")
+novel_gene <- novel_exon_table %>% separate_rows(gene_id,       sep = ";")
+
+# 3) Plot: Distribution of novel exons per isoform
+exons_per_iso <- novel_iso %>%
+  count(transcript_id, name = "novel_exon_count")
+
+ggplot(exons_per_iso, aes(novel_exon_count)) +
+  geom_histogram(binwidth = 1, boundary = 0.5, fill = "steelblue") +
+  scale_x_continuous(breaks = seq(1, max(exons_per_iso$novel_exon_count), by = 1)) +
+  labs(
+    title = "Distribution of Novel Exons per Isoform",
+    x     = "Number of Novel Exons",
+    y     = "Number of Isoforms"
+  ) +
+  theme_minimal()
+
+# 4) Plot: Distribution of novel exons per gene
+exons_per_gene <- novel_gene %>%
+  count(gene_id, name = "novel_exon_count")
+
+ggplot(exons_per_gene, aes(novel_exon_count)) +
+  geom_histogram(binwidth = 1, boundary = 0.5, fill = "orchid") +
+  scale_x_continuous(breaks = seq(1, max(exons_per_gene$novel_exon_count), by = 1)) +
+  labs(
+    title = "Distribution of Novel Exons per Gene",
+    x     = "Number of Novel Exons",
+    y     = "Number of Genes"
+  ) 
+
+# 5) Plot: Top 10 genes by novel‑exon count
+top_genes <- exons_per_gene %>%
+  arrange(desc(novel_exon_count)) %>%
+  slice_head(n = 10)
+
+ggplot(top_genes, aes(x = reorder(gene_id, novel_exon_count), y = novel_exon_count)) +
+  geom_col(fill = "coral") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Genes by Novel Exon Count",
+    x     = "Gene ID",
+    y     = "Novel Exon Count"
+  ) 
+
+# 6) Plot: Distribution of novel exon lengths with high-resolution x-axis
+novel_exon_table <- novel_exon_table %>%
+  mutate(length = end - start + 1)
+
+max_len <- max(novel_exon_table$length, na.rm = TRUE)
+
+ggplot(novel_exon_table, aes(length)) +
+  geom_histogram(binwidth = 25, fill = "seagreen", boundary = 0) +
+  scale_x_continuous(
+    breaks = seq(0, max_len, by = 200),
+    limits = c(0, max_len)
+  ) +
+  labs(
+    title = "Distribution of Novel Exon Lengths",
+    x     = "Exon Length (bp)",
+    y     = "Count"
+  ) 
+
+# 7) Print: Number of Genes with at least one novel exon
+n_genes <- novel_gene %>%
+  distinct(gene_id) %>%
+  nrow()
+cat("Number of Genes with at least one novel exon:", n_genes, "\n")
+
+# 8) Print: Number of novel isoforms with at least one novel exon
+n_isoforms <- novel_iso %>%
+  distinct(transcript_id) %>%
+  nrow()
+cat("Number of novel isoforms with at least one novel exon:", n_isoforms, "\n")
+
+
+```
+
+## Micro_exons
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+# 1) Read in your novel-exon table
+novel_exon_table  %>%
+  mutate(length = end - start + 1)
+
+# 2) Filter micro exons: those with length < 50 bp
+micro_exons <- novel_exon_table %>%
+  filter(length < 50)
+
+# 3) Save micro exon table for later use
+write_csv(micro_exons, "novel_micro_exons.csv")
+cat("Number of novel micro exons (<50 bp):", nrow(micro_exons), "\n")
+
+# 4) Explode gene_id and transcript_id for plotting
+micro_iso  <- micro_exons %>% separate_rows(transcript_id, sep = ";")
+micro_gene <- micro_exons %>% separate_rows(gene_id,       sep = ";")
+
+# 5) Plot: Distribution of micro exons per isoform
+micro_per_iso <- micro_iso %>% count(transcript_id, name = "micro_exon_count")
+
+ggplot(micro_per_iso, aes(micro_exon_count)) +
+  geom_histogram(binwidth = 1, boundary = 0.5, fill = "steelblue") +
+  scale_x_continuous(breaks = seq(1, max(micro_per_iso$micro_exon_count), by = 1)) +
+  labs(
+    title = "Distribution of Novel Micro Exons per Isoform",
+    x     = "Number of Micro Exons",
+    y     = "Number of Isoforms"
+  ) +
+  theme_minimal()
+
+# 6) Plot: Distribution of micro exons per gene
+micro_per_gene <- micro_gene %>% count(gene_id, name = "micro_exon_count")
+
+ggplot(micro_per_gene, aes(micro_exon_count)) +
+  geom_histogram(binwidth = 1, boundary = 0.5, fill = "orchid") +
+  scale_x_continuous(breaks = seq(1, max(micro_per_gene$micro_exon_count), by = 1)) +
+  labs(
+    title = "Distribution of Novel Micro Exons per Gene",
+    x     = "Number of Micro Exons",
+    y     = "Number of Genes"
+  ) +
+  theme_minimal()
+
+# 7) Plot: Top 10 genes by micro-exon count
+top_micro_genes <- micro_per_gene %>%
+  arrange(desc(micro_exon_count)) %>%
+  slice_head(n = 10)
+
+ggplot(top_micro_genes, aes(x = reorder(gene_id, micro_exon_count), y = micro_exon_count)) +
+  geom_col(fill = "coral") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Genes by Novel Micro Exon Count",
+    x     = "Gene ID",
+    y     = "Micro Exon Count"
+  ) +
+  theme_minimal()
+
+# 8) Plot: Distribution of micro exon lengths
+
+ggplot(micro_exons, aes(length)) +
+  geom_histogram(binwidth = 5, fill = "seagreen", boundary = 0) +
+  labs(
+    title = "Distribution of Novel Micro Exon Lengths (<50 bp)",
+    x     = "Exon Length (bp)",
+    y     = "Count"
+  ) +
+  theme_minimal()
+```
+
+Are novel isoforms more highly enriched in some clsuters over others
+```{r}
+# 1) Read in pseudobulk mean expression (rows: transcript_id, cols: iso.<cell_type>)
+pbulk <- SQANTI_data_merged_df %>%
+  select(transcript_id, starts_with("iso."))
+
+# 3) Annotate pseudobulk df with is_novel flag
+pbulk <- pbulk %>%
+  mutate(is_novel = transcript_id %in% novel_exon_table$transcript_id)
+
+# 4) Reshape to long format for comparison
+pbulk_long <- pbulk %>%
+  pivot_longer(cols = starts_with("iso."),
+               names_to = "cell_type",
+               values_to = "expr")
+
+# 5) Perform Wilcoxon rank-sum test per cell type
+test_results <- pbulk_long %>%
+  group_by(cell_type) %>%
+  summarise(
+    median_novel = median(expr[is_novel], na.rm = TRUE),
+    median_known = median(expr[!is_novel], na.rm = TRUE),
+    p_value      = wilcox.test(expr ~ is_novel,
+                               data = cur_data(),
+                               alternative = "two.sided")$p.value
+  ) %>%
+  arrange(p_value)
+
+# 6) Print test results
+print(test_results)
+
+# 7) Boxplot: novel vs known isoform expression across cell types
+ggplot(pbulk_long, aes(x = cell_type, y = expr, fill = is_novel)) +
+  geom_boxplot(position = position_dodge(width = 0.8)) +
+  labs(
+    title = "Pseudo-bulk Expression of Novel vs Known Isoforms",
+    x     = "Cell Type",
+    y     = "Mean Expression",
+    fill  = "Novel Exon"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + stat_summary(fun = median, geom = "point", position=position_dodge(0.8),
+               shape=95, size=5, color="black")
+
+library(effsize)
+
+for(ct in unique(pbulk_long$cell_type)) {
+  dat <- filter(pbulk_long, cell_type == ct)
+  d <- cliff.delta(dat$expr ~ dat$is_novel)
+  cat(ct, 
+      "median_novel =",  median(dat$expr[dat$is_novel]), 
+      "median_known =",  median(dat$expr[!dat$is_novel]), 
+      "Cliff's delta =", round(d$estimate, 2),
+      " (", d$magnitude, ")\n")
+}
+
+
+```
+```{r}
+# 3) Select only the isoform expression columns plus the transcript_id and flag novel isoforms
+pbulk <- pbulk %>%
+  dplyr::select(transcript_id, starts_with("iso.")) %>%
+  mutate(is_novel = transcript_id %in% novel_exon_table$transcript_id)
+
+# 4) Reshape to long format
+df_long <- pbulk %>%
+  pivot_longer(
+    cols      = starts_with("iso."),
+    names_to  = "cell_type",
+    values_to = "expr"
+  )
+
+# 5) Set a TPM threshold to call an isoform "expressed"
+threshold_tpm <- 100
+
+# 6) Flag expressed isoforms
+df_long <- df_long %>%
+  mutate(is_expressed = expr >= threshold_tpm)
+
+# 7) Enrichment test: Fisher's exact test per cell type
+fisher_results <- df_long %>%
+  group_by(cell_type) %>%
+  summarise(
+    novel_expressed     = sum(is_novel & is_expressed),
+    novel_not_expressed = sum(is_novel & !is_expressed),
+    known_expressed     = sum(!is_novel & is_expressed),
+    known_not_expressed = sum(!is_novel & !is_expressed)
+  ) %>%
+  rowwise() %>%
+  mutate(
+    fisher     = list(fisher.test(matrix(
+      c(novel_expressed,
+        novel_not_expressed,
+        known_expressed,
+        known_not_expressed),
+      nrow = 2,
+      byrow = TRUE
+    ))),
+    p_value     = fisher$p.value,
+    odds_ratio  = unname(fisher$estimate)
+  ) %>%
+  dplyr::select(-fisher)
+
+# 8) Print and save Fisher results
+txt_path <- "fisher_pbulk_thresholded.csv"
+print(fisher_results)
+write_csv(fisher_results, txt_path)
+cat("Fisher test results saved to", txt_path, "\n")
+
+# 9) Effect-size: Cliff's delta for all isoforms (numeric comparison)
+cat("\nCliff's delta (all isoforms) per cell type:\n")
+for(ct in unique(df_long$cell_type)) {
+  dat_all <- filter(df_long, cell_type == ct)
+  d_all   <- cliff.delta(expr ~ is_novel, data = dat_all)
+  cat(ct,
+      "median_novel =", median(dat_all$expr[dat_all$is_novel], na.rm = TRUE),
+      "median_known =", median(dat_all$expr[!dat_all$is_novel], na.rm = TRUE),
+      "Cliff's delta =", round(d_all$estimate, 2),
+      "(", d_all$magnitude, ")\n")
+}
+
+# 10) Effect-size: Cliff's delta for expressed isoforms only
+cat("\nCliff's delta (expressed isoforms only, TPM >=", threshold_tpm, ") per cell type:\n")
+for(ct in unique(df_long$cell_type)) {
+  dat_expr <- filter(df_long, cell_type == ct & is_expressed)
+  if(nrow(dat_expr) > 0) {
+    d_expr <- cliff.delta(expr ~ is_novel, data = dat_expr)
+    cat(ct,
+        "n_expressed =", nrow(dat_expr),
+        "median_novel =", median(dat_expr$expr[dat_expr$is_novel], na.rm = TRUE),
+        "median_known =", median(dat_expr$expr[!dat_expr$is_novel], na.rm = TRUE),
+        "Cliff's delta =", round(d_expr$estimate, 2),
+        "(", d_expr$magnitude, ")\n")
+  } else {
+    cat(ct, "No isoforms pass threshold for expressed-only delta.\n")
+  }
+}
+
+
+```
+
+Single-cell detection: If you have per-cell data, look at the fraction of cells in each type that detect each isoform. That can uncover cell-type specificity even when pseudo-bulk means are similar.

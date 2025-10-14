@@ -1,0 +1,758 @@
+---
+title: "Isoform Entropy Analysis"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+library(Seurat)
+library(Matrix)
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(ggrepel)
+library(pheatmap)
+```
+
+# 1. Subset to Cluster of Interest
+```{r}
+VlnPlot(obj, group.by = "IntermediateType", features = "nCount_RNA")
+
+# Subset to RG (cycling)
+RG_cyc <- subset(obj, subset = IntermediateType == "RG (cycling)")
+
+# Keep top 50% of cells by nCount_RNA
+cutoff <- quantile(RG_cyc@meta.data$nCount_RNA, probs = 0.50)
+RG_cyc_top_count_cells <- subset(RG_cyc, subset = nCount_RNA >= cutoff)
+
+VlnPlot(RG_cyc_top_count_cells, features = "nCount_RNA") | 
+  VlnPlot(RG_cyc, features = "nCount_RNA")
+```
+# lets plot count divesity 
+```{r}
+# Choose assay and slot
+assay_use <- "RNA"
+slot_use  <- "counts"
+
+# Select the first 10 cells
+cell_ids <- colnames(RG_cyc_top_count_cells)[1]
+
+# Store distributions for all cells
+umi_all <- data.frame()
+
+for (cell in cell_ids) {
+  counts <- GetAssayData(RG_cyc_top_count_cells, assay = assay_use, slot = slot_use)[, cell]
+  counts <- as.numeric(counts)
+
+  # Tabulate counts (including 0)
+  dist <- as.data.frame(table(factor(counts, levels = 0:max(counts))))
+  colnames(dist) <- c("UMI_count", "Num_genes")
+  dist$UMI_count <- as.numeric(as.character(dist$UMI_count))
+  dist$Num_genes <- as.numeric(dist$Num_genes)
+  dist$cell_id <- cell
+  
+  umi_all <- rbind(umi_all, dist)
+}
+
+# Plot: no log scale, include 0s
+ggplot(umi_all, aes(x = UMI_count, y = Num_genes, color = cell_id)) +
+  geom_line() +
+  theme_minimal() +
+  labs(title = "UMI Count Distribution per Gene (10 cells)",
+       x = "Raw UMI count per gene",
+       y = "Number of genes") +
+  coord_cartesian(xlim = c(0, 50))  # Limit x-axis view to 0–100
+
+library(Seurat)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(Matrix)
+
+# Function to get per-cell UMI distributions and average them
+get_avg_umi_distribution <- function(seu, assay = "RNA", slot = "counts", label = "obj", include_zeros = TRUE) {
+  library(Matrix)
+  counts <- GetAssayData(seu, assay = assay, slot = slot)
+  counts <- as(counts, "dgTMatrix")
+
+  num_genes <- nrow(counts)
+
+  # Non-zero UMI entries
+  df <- data.frame(
+    gene = counts@i + 1,
+    cell = counts@j + 1,
+    umi  = counts@x
+  )
+
+  # Count UMI frequencies per cell (excluding 0s)
+  dist_nonzero <- df %>%
+    count(cell, umi, name = "num_genes") %>%
+    rename(UMI_count = umi)
+
+  if (include_zeros) {
+    # Count how many genes had 0 UMIs for each cell
+    num_detected_per_cell <- df %>%
+      count(cell, name = "nonzero_genes")
+
+    dist_zero <- num_detected_per_cell %>%
+      mutate(UMI_count = 0,
+             num_genes = num_genes - nonzero_genes) %>%
+      dplyr::select(cell, UMI_count, num_genes)
+
+    # Combine with non-zero
+    dist_combined <- bind_rows(dist_nonzero, dist_zero)
+  } else {
+    dist_combined <- dist_nonzero
+  }
+
+  # Average across cells
+  avg_dist <- dist_combined %>%
+    group_by(UMI_count) %>%
+    summarize(
+      Avg_num_genes = mean(num_genes),
+      .groups = "drop"
+    ) %>%
+    mutate(object = label)
+
+  return(avg_dist)
+}
+
+# Include zeros in distribution
+dist_with_zeros <- get_avg_umi_distribution(obj, label = "main_seurat", include_zeros = TRUE)
+dist_with_zeros_sub <- get_avg_umi_distribution(RG_cyc_top_count_cells, label = "subset_seurat_RG", include_zeros = TRUE)
+
+# Exclude zeros (like original version)
+dist_no_zeros <- get_avg_umi_distribution(obj, label = "main_seurat", include_zeros = FALSE)
+dist_no_zeros_sub <- get_avg_umi_distribution(RG_cyc_top_count_cells, label = "subset_seurat_RG", include_zeros = FALSE)
+
+
+umi_dist <- rbind(dist_with_zeros, dist_with_zeros_sub)
+
+# Plot
+ggplot(umi_dist, aes(x = UMI_count, y = Avg_num_genes, color = object)) +
+  geom_line(size = 1) +
+  theme_minimal() +
+  scale_x_continuous(limits = c(0, 25)) +
+  labs(title = "Average UMI Count Distribution per Cell (Including Zeros)",
+       x = "UMI count per gene",
+       y = "Average number of genes per cell")
+
+umi_dist <- rbind(dist_no_zeros, dist_no_zeros_sub)
+
+# Plot
+ggplot(umi_dist, aes(x = UMI_count, y = Avg_num_genes, color = object)) +
+  geom_line(size = 1) +
+  theme_minimal() +
+  scale_x_continuous(limits = c(0, 25)) +
+  labs(title = "Average UMI Count Distribution per Cell (Including Zeros)",
+       x = "UMI count per gene",
+       y = "Average number of genes per cell")
+
+```
+
+
+# 2. Select Genes for Entropy Analysis
+```{r}
+DefaultAssay(RG_cyc_top_count_cells) <- "RNA"
+rna_counts  <- GetAssayData(RG_cyc_top_count_cells, assay = "RNA", slot = "counts")
+
+gene_totals <- Matrix::rowSums(rna_counts)
+genes_to_test <- names(gene_totals[gene_totals >= 100])
+genes_sorted <- genes_to_test[order(gene_totals[genes_to_test], decreasing = TRUE)]
+#top_100_genes <- head(genes_sorted, 100)
+```
+
+# 3. Compute Entropy Matrix
+```{r, eval=TRUE, echo=TRUE}
+compute_gene_entropy_matrix <- function(obj,
+                                        genes,
+                                        assay = "iso",
+                                        slot.counts = "counts",
+                                        slot.data = "data",
+                                        ident.name = NULL,
+                                        alpha = 0.1,
+                                        min_counts_per_cell = 5,
+                                        isoform_min_pct_cells = 0.05,
+                                        isoform_cumulative_pct = 0.95,
+                                        min_cell_fraction = 0.75,
+                                        p = NULL) {
+  if (!is.null(ident.name)) {
+    Idents(obj) <- ident.name
+  }
+
+  if (is.null(p)) stop("Please pass a progressor object via the `p` argument.")
+
+  cells <- colnames(obj)
+  mat_counts <- GetAssayData(obj, assay = assay, slot = slot.counts)[, cells, drop = FALSE]
+  mat_data   <- GetAssayData(obj, assay = assay, slot = slot.data)
+
+  entropy_mat <- matrix(NA_real_, nrow = length(genes), ncol = length(cells))
+  rownames(entropy_mat) <- genes
+  colnames(entropy_mat) <- cells
+
+  for (gene in genes) {
+    p(sprintf("Processing %s", gene))
+
+    isoforms <- grep(paste0("(^|-|\\b)", gene, "($|\\b)"), rownames(mat_data), value = TRUE)
+    if (length(isoforms) < 2) {
+      message("Skipping ", gene, ": fewer than 2 isoforms")
+      next
+    }
+
+    submat <- mat_counts[isoforms, , drop = FALSE]
+    gene_total_counts <- colSums(submat)
+    keep_cells <- names(gene_total_counts)[gene_total_counts >= min_counts_per_cell]
+    if (length(keep_cells) == 0) {
+      message("Skipping ", gene, ": no cells with at least ", min_counts_per_cell, " gene counts")
+      next
+    }
+
+    submat_f <- submat[, keep_cells, drop = FALSE]
+
+    pct_cells_expressed <- rowMeans(submat_f > 0)
+    iso_keep_pct <- names(pct_cells_expressed)[pct_cells_expressed >= isoform_min_pct_cells]
+    submat_f <- submat_f[iso_keep_pct, , drop = FALSE]
+
+    filter_top_isoforms <- function(counts, threshold = 0.9) {
+      proportions <- counts / sum(counts)
+      sorted <- sort(proportions, decreasing = TRUE)
+      keep <- which(cumsum(sorted) <= threshold)
+      if (length(keep) == 0) keep <- 1
+      names(sorted)[c(keep, length(keep) + 1)]
+    }
+
+    iso_keep_cum <- unique(unlist(apply(submat_f, 2, filter_top_isoforms, threshold = isoform_cumulative_pct)))
+    iso_keep_final <- intersect(rownames(submat_f), iso_keep_cum)
+    if (length(iso_keep_final) < 2) {
+      message("Skipping ", gene, ": fewer than 2 isoforms remain after filtering")
+      next
+    }
+
+    submat_final <- submat_f[iso_keep_final, , drop = FALSE]
+    mat_smoothed <- submat_final + alpha
+    p_mat <- sweep(mat_smoothed, 2, colSums(mat_smoothed), FUN = "/")
+
+    entropy_vec <- apply(p_mat, 2, function(p) {
+      valid <- p > 0
+      -sum(p[valid] * log2(p[valid])) / log2(sum(valid))
+    })
+
+    entropy_mat[gene, colnames(submat_final)] <- entropy_vec
+  }
+
+  entropy_mat <- entropy_mat[rowMeans(!is.na(entropy_mat)) >= min_cell_fraction, ]
+  return(entropy_mat)
+}
+
+
+
+library(progressr)
+handlers("txtprogressbar")  # or "rstudio"
+
+genes <- genes_sorted  # or top_100_genes
+
+# Use with_progress and create progressor inside
+res <- with_progress({
+  p <- progressor(along = genes)
+
+  compute_gene_entropy_matrix(
+    obj = RG_cyc_top_count_cells,
+    genes = genes,
+    p = p
+  )
+})
+
+
+dim(res)
+```
+
+# 4. Visualize Entropy Results
+
+## Boxplot per Gene
+```{r}
+entropy_long <- melt(head(res), varnames = c("gene", "cell"), value.name = "entropy") %>% na.omit()
+
+ggplot(entropy_long, aes(x = gene, y = entropy)) +
+  geom_boxplot() +
+  geom_violin(outlier.size = 0.5) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Entropy distribution per gene", y = "Normalized Entropy", x = "Gene")
+```
+
+## Heatmap of Entropy
+```{r}
+pheatmap(res,
+         show_rownames = TRUE,
+         show_colnames = FALSE,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         main = "Entropy heatmap",
+         na_col = "black")
+```
+
+# 5. Entropy vs Expression Analysis
+
+## Median Entropy vs Total Gene Counts
+```{r}
+library(ggplot2)
+library(ggrepel)
+library(ggpubr)
+
+# Calculate median entropy
+gene_median_entropy <- apply(res, 1, function(x) median(x, na.rm = TRUE))
+
+# Build plot data frame
+plot_df <- data.frame(
+  gene = rownames(res),
+  total_counts = gene_totals[rownames(res)],
+  median_entropy = gene_median_entropy
+)
+
+# Identify top 10 genes with highest median entropy
+top10_genes <- names(sort(gene_median_entropy, decreasing = TRUE))[1:10]
+plot_df$label <- ifelse(plot_df$gene %in% top10_genes, plot_df$gene, NA)
+
+# Plot with regression line, labels, and R² (labels on the right)
+ggplot(plot_df, aes(x = total_counts, y = median_entropy)) +
+  geom_point(alpha = 0.6) +
+  geom_text_repel(aes(label = label), na.rm = TRUE, size = 3) +
+  scale_x_log10() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  stat_cor(
+    method = "pearson",
+    aes(label = paste(..rr.label.., ..p.label.., sep = "~`,`~")),
+    label.x.npc = 0.75, label.y.npc = 0.85, size = 4
+  ) +
+  stat_regline_equation(
+    aes(label = ..eq.label..),
+    label.x.npc = 0.75,
+    label.y.npc = 0.78, 
+    size = 4
+  ) +
+  theme_bw() +
+  labs(
+    title = "Median Entropy vs Total Gene Count",
+    x = "Total Gene Count (log10)",
+    y = "Median Normalized Entropy"
+  )
+
+
+
+```
+
+## Entropy Variance vs Total Gene Counts (with Labels)
+```{r}
+gene_var_entropy <- apply(res, 1, function(x) var(x, na.rm = TRUE))
+plot_df_var <- data.frame(
+  gene = rownames(res),
+  total_counts = gene_totals[rownames(res)],
+  entropy_variance = gene_var_entropy
+)
+
+genes_to_label <- names(sort(gene_var_entropy, decreasing = TRUE))[1:10]
+plot_df_var$label <- ifelse(plot_df_var$gene %in% genes_to_label, plot_df_var$gene, NA)
+
+ggplot(plot_df_var, aes(x = total_counts, y = entropy_variance)) +
+  geom_point(alpha = 0.6) +
+  scale_x_log10() +
+  theme_bw() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  ggrepel::geom_text_repel(aes(label = label), size = 3, max.overlaps = Inf, na.rm = TRUE) +
+  labs(title = "Entropy Variance vs Total Gene Count (labeled)",
+       x = "Total Gene Count (log10)",
+       y = "Entropy Variance")
+```
+
+# 6. Visualize Dominant Isoform Expression
+```{r}
+# Example: visualize isoform usage for HMGN2
+gene <- "DDX3X"
+
+plot_dominant_isoform(RG_cyc_top_count_cells, genes = gene, min_gene_counts = 5)
+
+# Visualize isoform features across UMAP
+source(here("code", "plot_isoforms_exp_umap.R"))
+
+plot_isoforms_exp_umap(
+  obj       = RG_cyc_top_count_cells,
+  gene      = gene,
+  reduction = "umap.harm",
+  slot      = "data",
+  n_features = NULL  # Optional: limit to top 5 isoforms
+)
+
+source(here("code", "plotIsoformPieCells.R"))
+plotIsoformPieCells(
+  seurat_obj = obj,
+  gene       = gene,
+  assay      = "iso",
+  slot       = "counts",
+  top_n      = 2,
+  n_cells    = 20,
+  plot_col = 5
+)
+
+source(here("code", "plotIsoformHeatmap.R"))
+# Start from df_long from previous function
+plotIsoformHeatmap(
+  seurat_obj = RG_cyc_top_count_cells,
+  gene = gene,
+  top_n_isoforms = 100,
+)
+```
+
+```{r}
+# 2. Compute variance and confidence intervals
+gene_var <- apply(res, 1, function(x) var(x, na.rm = TRUE))
+n_cells <- rowSums(!is.na(res))
+
+alpha <- 0.05
+lower_CI <- (n_cells - 1) * gene_var / qchisq(1 - alpha/2, df = n_cells - 1)
+upper_CI <- (n_cells - 1) * gene_var / qchisq(alpha/2, df = n_cells - 1)
+
+var_summary <- data.frame(
+  gene = names(gene_var),
+  variance = gene_var,
+  n_cells = n_cells,
+  CI_lower = lower_CI,
+  CI_upper = upper_CI
+)
+
+# 3. Select top 20 genes by variance
+top_var_summary <- var_summary %>%
+  arrange(desc(variance)) %>%
+  dplyr::slice(1:40)
+
+top_entropy_res <- res[top_var_summary$gene, , drop = FALSE]
+
+# 4. Plot heatmap of top entropy genes
+pheatmap(top_entropy_res,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         show_colnames = FALSE,
+         na_col = "black",
+         main = "Top 20 Genes with Highest Entropy Variance")
+
+# 5. Optional: Plot variance bars with CI and label number of cells used
+ggplot(top_var_summary, aes(x = reorder(gene, variance), y = variance)) +
+  geom_col(fill = "steelblue") +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper), width = 0.3) +
+  geom_text(aes(label = n_cells), hjust = -4, size = 3.5) +  # Add number of cells
+  coord_flip() +
+  labs(
+    title = "Top 20 Genes by Entropy Variance with 95% CI",
+    y = "Entropy Variance",
+    x = "Gene",
+    caption = "Number next to each bar is number of cells used for that gene"
+  ) +
+  theme_minimal() +
+  ylim(0, max(top_var_summary$CI_upper) * 1.1)  # Add space for labels
+
+
+
+```
+
+## is entropy related to totoal coutns 
+```{r}
+# Total UMI per cell (across all genes, in "RNA" assay)
+total_umi_per_cell <- Matrix::colSums(GetAssayData(RG_cyc_top_count_cells, assay = "RNA", slot = "counts"))
+
+# Entropy values for the gene of interest
+gene_entropy <- res["DPYSL2", ]
+valid_cells <- names(gene_entropy[!is.na(gene_entropy)])
+
+# Prepare dataframe for plotting
+df <- data.frame(
+  cell = valid_cells,
+  total_umi = total_umi_per_cell[valid_cells],
+  entropy = gene_entropy[valid_cells]
+)
+
+# Plot entropy vs total UMI per cell
+library(ggplot2)
+library(ggpubr)
+
+ggplot(df, aes(x = total_umi, y = entropy)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  stat_cor(method = "pearson", label.x.npc = "left", label.y.npc = "top") +
+  theme_bw() +
+  labs(
+    title = "DPYSL2: Entropy vs Total UMI Count (per cell)",
+    x = "Total UMI Count per Cell",
+    y = "Normalized Entropy"
+  )
+
+```
+
+```{r}
+
+
+# List of genes to plot
+genes_to_plot <- top_var_summary$gene  # or replace with your own vector of gene names
+
+library(ggplot2)
+library(ggpubr)
+
+# Total UMI per cell (RNA assay)
+total_umi_per_cell <- Matrix::colSums(GetAssayData(RG_cyc_top_count_cells, assay = "RNA", slot = "counts"))
+
+# Build long dataframe with entropy values for all selected genes
+entropy_long <- reshape2::melt(res[genes_to_plot, , drop = FALSE],
+                               varnames = c("gene", "cell"),
+                               value.name = "entropy") %>%
+  na.omit()
+
+# Add total UMI per cell
+entropy_long$total_umi <- total_umi_per_cell[entropy_long$cell]
+
+# Plot all points together
+ggplot(entropy_long, aes(x = total_umi, y = entropy)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  stat_cor(method = "pearson", label.x.npc = "left", label.y.npc = "top") +
+  theme_bw() +
+  labs(
+    title = "Entropy vs Total UMI Count per Cell (Top Entropy Genes)",
+    x = "Total UMI Count per Cell",
+    y = "Normalized Entropy"
+  )
+
+
+ggplot(entropy_long, aes(x = total_umi, y = entropy, color = gene)) +
+  geom_point(alpha = 0.4) +
+  theme_bw() +
+  labs(title = "Entropy vs Total UMI Count by Gene",
+       x = "Total UMI Count per Cell",
+       y = "Normalized Entropy")
+```
+
+
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+
+# Prepare data
+plot_df <- data.frame(
+  gene = rownames(res),
+  median_entropy = apply(res, 1, median, na.rm = TRUE),
+  entropy_var = apply(res, 1, var, na.rm = TRUE)
+)
+
+# Identify top 10 variable genes to label
+top_labels <- names(sort(plot_df$entropy_var, decreasing = TRUE))[1:10]
+plot_df$label <- ifelse(plot_df$gene %in% top_labels, plot_df$gene, NA)
+
+# Compute correlation
+cor_res <- cor.test(plot_df$median_entropy, plot_df$entropy_var, method = "pearson")
+r_value <- signif(cor_res$estimate, 3)
+p_value <- signif(cor_res$p.value, 3)
+cor_label <- paste0("R = ", r_value, ", p = ", p_value)
+
+# Plot
+ggplot(plot_df, aes(x = median_entropy, y = entropy_var)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  ggrepel::geom_text_repel(aes(label = label), size = 3, na.rm = TRUE) +
+  annotate("text", x = Inf, y = Inf, label = cor_label, hjust = 1.1, vjust = 1.5, size = 4) +
+  theme_minimal() +
+  labs(title = "Entropy Variance vs Median Entropy",
+       x = "Median Entropy",
+       y = "Entropy Variance")
+
+
+```
+### ok some future analysis to look at 
+
+
+#Gene clustering ->	Identify gene programs with shared isoform diversity
+
+```{r}
+ph <- pheatmap::pheatmap(
+  res,
+  show_rownames = TRUE,
+  show_colnames = FALSE,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  main = "Entropy heatmap",
+  na_col = "black"
+)
+
+library(cluster)
+d <- dist(res)
+sil <- sapply(2:11, function(k) {
+  groups <- cutree(hclust(d), k)
+  mean(cluster::silhouette(groups, d)[, 3])
+})
+
+plot(2:11, sil, type = "b", ylab = "Average silhouette width", xlab = "k", main = "Silhouette analysis")
+
+#decide on K=2 as first pass
+gene_clusters <- cutree(ph$tree_row, k = 2)
+genes_cluster1 <- names(gene_clusters[gene_clusters == 1])
+genes_cluster2 <- names(gene_clusters[gene_clusters == 2])
+
+table(gene_clusters)
+
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+ego1 <- enrichGO(
+  gene         = genes_cluster1,
+  OrgDb        = org.Hs.eg.db,
+  keyType      = "SYMBOL",
+  ont          = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.2,
+  readable     = TRUE
+)
+
+ego2 <- enrichGO(
+  gene         = genes_cluster2,
+  OrgDb        = org.Hs.eg.db,
+  keyType      = "SYMBOL",
+  ont          = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.2,
+  readable     = TRUE
+)
+
+library(enrichplot)
+
+dotplot(ego1, showCategory = 10, title = "Cluster 1 GO:BP") +
+  theme(axis.text.y = element_text(size = 10))
+
+dotplot(ego2, showCategory = 10, title = "Cluster 2 GO:BP") +
+  theme(axis.text.y = element_text(size = 10))
+
+compareCluster(
+  list(Cluster1 = genes_cluster1, Cluster2 = genes_cluster2),
+  fun = "enrichGO",
+  OrgDb = org.Hs.eg.db,
+  keyType = "SYMBOL",
+  ont = "BP"
+) %>% dotplot()
+
+entropy_cluster1 <- rowMeans(res[genes_cluster1, ])
+entropy_cluster2 <- rowMeans(res[genes_cluster2, ])
+boxplot(entropy_cluster1, entropy_cluster2, names = c("Cluster 1", "Cluster 2"))
+
+entropy_cluster2 <- rowMeans(res[genes_cluster2, , drop = FALSE], na.rm = TRUE)
+
+# Rank and get top N (e.g., 10)
+top_cluster2_genes <- names(sort(entropy_cluster2, decreasing = TRUE))[1:10]
+
+# Find all isoforms that belong to these genes
+all_isoforms <- rownames(GetAssayData(obj, assay = "iso", slot = "counts"))
+top_isoform_ids <- grep(
+  paste0("(^|-|\\b)(", paste(top_cluster2_genes, collapse = "|"), ")($|\\b)"),
+  all_isoforms,
+  value = TRUE
+)
+
+library(patchwork)
+
+for (g in top_cluster2_genes) {
+  isoforms <- grep(paste0("(^|-|\\b)", g, "($|\\b)"), all_isoforms, value = TRUE)
+  
+  # Skip if only 1 isoform
+  if (length(isoforms) < 2) next
+
+  plots <- lapply(isoforms, function(i) {
+    FeaturePlot(obj, reduction = "umap.harm", features = i) +
+      labs(title = i) +
+      theme_minimal()
+  })
+
+  print(wrap_plots(plots, ncol = 2) + plot_annotation(title = paste("Isoform expression for", g)))
+}
+
+```
+
+```{r}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+ego_bp <- enrichGO(
+  gene          = genes_cluster2,
+  OrgDb         = org.Hs.eg.db,
+  keyType       = "SYMBOL",
+  ont           = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2,
+  readable      = TRUE
+)
+
+dotplot(ego_bp, showCategory = 10, title = "GO: Biological Process")
+```
+
+```{r}
+ego_mf <- enrichGO(
+  gene          = genes_cluster2,
+  OrgDb         = org.Hs.eg.db,
+  keyType       = "SYMBOL",
+  ont           = "MF",
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2,
+  readable      = TRUE
+)
+
+dotplot(ego_mf, showCategory = 10, title = "GO: Molecular Function")
+```
+
+```{r}
+
+ego_cc <- enrichGO(
+  gene          = genes_cluster2,
+  OrgDb         = org.Hs.eg.db,
+  keyType       = "SYMBOL",
+  ont           = "CC",
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.2,
+  readable      = TRUE
+)
+
+dotplot(ego_cc, showCategory = 10, title = "GO: Cellular Component")
+
+# Convert SYMBOL → ENTREZID
+entrez_ids <- bitr(genes_cluster2, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)$ENTREZID
+
+ekegg <- enrichKEGG(
+  gene          = entrez_ids,
+  organism      = "hsa",
+  pAdjustMethod = "BH",
+  pvalueCutoff  = 0.05
+)
+
+dotplot(ekegg, showCategory = 10, title = "KEGG Pathways")
+
+```
+
+
+```{r}
+
+```
+
+
+#Metadata comparison	-> See if isoform entropy marks cell identity, state, or condition
+
+
+#PCA/UMAP ->	Reveal new structure based on entropy, not expression
+
+
+#Enrichment ->	Determine biological functions of isoform-diverse genes
+
+
+#Entropy vs Expression -> 	Assess whether isoform diversity is tied to abundance

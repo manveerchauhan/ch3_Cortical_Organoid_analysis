@@ -1,0 +1,39 @@
+name: "FLAMESv2_NDR0.75_2025"
+output_dir: ../docs
+navbar:
+  title: "FLAMESv2_NDR0.75_2025"
+  left:
+  - text: Home
+    href: index.html
+  - text: About
+    href: about.html
+  - text: License
+    href: license.html
+  - text: setup
+    href: setup.html
+  - text: setup_adapted
+    href: setup_adapted.html
+  - text: geneQC
+    href: geneQC.html
+  - text: geneQC_adapted
+    href: geneQC_adapted.html
+  - text: integration
+    href: integration.html
+  - text: cell_types
+    href: cell_types.html
+  - text: Add_isoform_counts
+    href: Add_isoform_counts.html
+  - text: traj
+    href: traj.html
+  - text: SQANTI # Planned
+    href: SQANTI.html
+  - text: DE # Planned
+    href: DE.html # DTU/ DE/ DI
+
+output:
+  workflowr::wflow_html:
+    toc: yes
+    toc_float: yes
+    theme: cosmo
+    highlight: textmate
+    code_folding: show

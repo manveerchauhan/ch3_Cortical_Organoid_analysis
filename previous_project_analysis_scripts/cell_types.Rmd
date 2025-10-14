@@ -1,0 +1,1016 @@
+---
+site: workflowr::wflow_site
+title: "Cell types"
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: textmate
+    code_folding: show
+---
+
+
+
+```{r setup, include=TRUE}
+library(clustifyr)
+library(ggplot2)
+library(cowplot)
+library(Seurat)
+library("ComplexHeatmap")
+library(here)
+library(grid)
+library(patchwork)
+library(dplyr)
+```
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE, fig.width=15, fig.height=5}
+set.seed(1234)
+
+qs_path <- here("output", "seurat_objects", "harm_seurat_filt_15PCS_seurat.qs")
+obj <- qs2::qs_read(qs_path) 
+
+DimPlot(obj, reduction = "umap.harm", label = T)
+
+# Construct KNN graph
+obj <- FindNeighbors(
+    obj,
+    reduction = "integrated.harm",
+    assay = "RNA",
+    dims = 1:15
+)
+
+
+# Cluster
+obj <- FindClusters(
+    obj, 
+    resolution = seq(0.1, 1, by = 0.1)
+)
+
+library("clustree")
+# Visualise cluster stability
+clustree(obj)
+
+
+```
+
+### decide on best clsuter res
+
+```{r check_clusters , echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE, fig.width=15, fig.height=5}
+# define the resolutions you ran
+resolutions <- seq(0.1, 1, by = 0.1)
+# build the corresponding metadata names
+meta_cols   <- paste0("RNA_snn_res.", resolutions)
+
+# make one DimPlot per resolution
+plots <- lapply(meta_cols, function(col) {
+  DimPlot(
+    obj,
+    group.by      = col,
+    reduction     = "umap.harm",
+    label         = TRUE,
+    label.size    = 4
+  ) + ggtitle(col)
+})
+
+# glue them together, 4 per row
+wrap_plots(plots, ncol = 5) + 
+  plot_annotation(title = "Clustering at Different Resolutions")
+```
+
+Based on Clustee will go will res 0.4.
+
+### Plot known marker genes
+
+```{r feauture plots, echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=15}
+FeaturePlot(obj, features = c("DLK1","GRIA1", "GRIA2","GRIN2B", "VIM", "PKM", "GAD1", "GAD2", "DCX", "POU5F1", "HOPX", "SST", "EOMES", "TBR1", "NRGN", "GFAP", "PAX6", "NEUROD1", "PTPRZ1", "TNC", "VIP", "ID2", "LAMP5", "NOS1", "PVALB", "SCUBE3", "PROM1", "PARD3", "PAX6", "DLX1", "DLX2", "LHX6", "DCC", "CDH12", "RELN", "NEUROG2", "FOXP2", "FOXP1", "CALB2", "CCK", "NR2F2", "XACT", "TPX2", "TAC1", "CORT", "FAT3", "KIF11"), reduction = "umap.harm")
+
+```
+
+### Cell type annaotions first pass.
+
+Some cell types are immediately clear. I'll assign these identities
+first, then identify marker genes and refine the cell typing in more
+detail. I won’t delve into extremely high-level classifications since
+the observed cell types differ from expectations; a broad classification
+should be sufficient for the FlamesV2 paper
+
+Res to 0.4. Tried reclsuting cluster 11. As there is this small cluster
+here that sits far away from 11 main cluster. subclustering didin't
+work. same as for 10. i think 10 is 2 clusters also based on HOPX
+expression
+
+```{r, eval=TRUE, echo=TRUE, message=TRUE, warning=FALSE, paged.print=TRUE, fig.width=10, fig.height=5}
+
+JoinLayers(obj) -> obj
+## save the active identify to a new metadata col
+Idents(obj) <- "RNA_snn_res.0.4"
+
+obj$orig_cluster <- Idents(obj)
+#DimPlot(obj, reduction = "umap.harm", group.by = c("Day", "orig.ident"))
+DimPlot(obj, reduction = "umap.harm", group.by = c("orig_cluster"), label = T)
+```
+
+### 
+
+obj, '1' = 'Stem cells', '7' = 'Stem cells', '13' = 'IP (EOMES, TBR2,
+SLC17A6)', \# excitatory expression '8' = 'SST IN', '2' = 'CGE dev IN
+(SP8, CALB2)', '12' = "oRG", '5' = "aRG (cycling)", '0' = "Mature IN
+cluster 1 (CORT)", '3' = "aRG")
+
+#### what we don't know
+
+'14' = "unknown IN/EX (FOXP2, GAD1, GAD2)", \# CNR1, CNTNAP4 PTCHD4
+PLCXD3 '10' = "Early, Glia precursor cells '(NFIA⁺/HEY1⁺, PDGFRA⁺)', '9'
+= 'Immature mitotic IN', '11' = 'Early post‐mitotic IN', '4' = 'Mature
+IN cluster 3 (EBF1, RELIN, FOXP1)', \# TAC1, CDH9, NEL1 '6' = 'Mature IN
+cluster 2 (FOXP2??). \# GALNTL6 C8orf34 - inhib nearly all are inhib but
+FOXP2 is very odd
+
+### Confirm CGE origin
+
+```{r, eval=TRUE, echo=TRUE, message=TRUE, warning=FALSE}
+MGE_markers <- c(
+  "NKX2-1",  # master MGE specifier
+  "LHX6",    # downstream of NKX2-1
+  "SOX6",    # maintains MGE fate
+  "SST",     # somatostatin interneuron lineage
+  "PVALB",   # parvalbumin interneuron lineage
+  "MKI67"    # proliferating IPCs in MGE
+)
+
+CGE_markers <- c(
+  "NR2F2",   # COUP-TFII, canonical CGE selector
+  "SP8",     # CGE progenitor TF
+  "PROX1",   # CGE lineage transcription factor
+  "VIP",     # vasoactive intestinal peptide interneurons
+  "CALB2",   # calretinin interneurons
+  "RELN",    # Reelin+ CGE‐derived cells
+  "LAMP5"    # neurogliaform interneurons
+)
+
+  # Interneuron lineages
+  MGE_IN             = c("NKX2-1","LHX6","SOX6","ZEB2","SATB1","ERBB4")
+  CGE_IN             = c("SP8","PROX1","NR2F2","COUP-TFII","OLIG3","GAD2")
+
+FeaturePlot(obj, features = MGE_markers, reduction = "umap.harm")
+FeaturePlot(obj, features = CGE_markers, reduction = "umap.harm")
+```
+
+## DE for each unknown cluster
+
+### Cluster 4
+
+```{r, eval=TRUE, echo=TRUE, message=TRUE, warning=FALSE, echo=TRUE}
+markers <- FindMarkers(
+    obj,
+    ident.1       = 4,
+    min.pct       = .5,
+    logfc.threshold = 1
+      
+  )
+  
+  # Sort by decreasing log2 fold change (avg_log2FC)
+markers <- markers[order(markers$avg_log2FC, decreasing = TRUE), , drop = FALSE]
+  
+  # Keep only the top 30
+head(row.names(markers), 50)
+
+```
+
+### Cluster 0
+
+```{r, eval=TRUE, echo=TRUE, message=TRUE, warning=FALSE, echo=TRUE}
+
+markers <- FindMarkers(
+    obj,
+    ident.1       = 0,
+    min.pct       = .5,
+    logfc.threshold = 1
+      
+  )
+  
+  # Sort by decreasing log2 fold change (avg_log2FC)
+markers <- markers[order(markers$avg_log2FC, decreasing = TRUE), , drop = FALSE]
+  
+  # Keep only the top 30
+head(row.names(markers), 50)
+```
+
+### Cluster 14
+
+```{r, eval=TRUE, echo=TRUE, message=TRUE, warning=FALSE, echo=TRUE}
+JoinLayers(obj) -> obj
+markers <- FindMarkers(
+    obj,
+    ident.1       = 14,
+    min.pct       = 0.5,
+    logfc.threshold = 1
+      
+  )
+  
+  # Sort by decreasing log2 fold change (avg_log2FC)
+markers <- markers[order(markers$avg_log2FC, decreasing = TRUE), , drop = FALSE]
+  
+  # Keep only the top 30
+head(row.names(markers), 50)
+
+```
+
+### Cluster 6
+
+```{r, eval=TRUE, echo=TRUE, message=TRUE, warning=FALSE, echo=TRUE}
+JoinLayers(obj) -> obj
+markers <- FindMarkers(
+    obj,
+    ident.1       = 6,
+    min.pct       = 0.5,
+    logfc.threshold = 1
+      
+  )
+  
+  # Sort by decreasing log2 fold change (avg_log2FC)
+markers <- markers[order(markers$avg_log2FC, decreasing = TRUE), , drop = FALSE]
+  
+  # Keep only the top 30
+head(row.names(markers), 50)
+
+```
+
+### Cluster 10
+
+```{r, eval=TRUE, echo=TRUE, message=TRUE, warning=FALSE, echo=TRUE}
+JoinLayers(obj) -> obj
+markers <- FindMarkers(
+    obj,
+    ident.1       = 10,
+    min.pct       = 0.5,
+    logfc.threshold = 1
+      
+  )
+  
+  # Sort by decreasing log2 fold change (avg_log2FC)
+markers <- markers[order(markers$avg_log2FC, decreasing = TRUE), , drop = FALSE]
+  
+  # Keep only the top 30
+head(row.names(markers), 50)
+
+```
+
+## Find All Marker genes
+
+```{r, eval=TRUE, echo=TRUE, message=TRUE, warning=FALSE, echo=TRUE}
+JoinLayers(obj) -> obj
+markers <- FindAllMarkers(
+    obj,
+    min.pct       = 0.50,
+    logfc.threshold = 1
+  )
+  
+  # Sort by decreasing log2 fold change (avg_log2FC)
+markers <- markers[order(markers$avg_log2FC, decreasing = TRUE), , drop = FALSE]
+  
+  # Keep only the top 30
+head(row.names(markers), 50)
+
+
+write.csv(markers, here("output", "DE_genes", "FindAllMarkers.csv"))
+```
+
+Its not clear what we have. Seems like cell have not complete diffed
+into an IN or EX linage. Will try GO analysis
+
+### GO Analysis
+
+```{r, eval=TRUE, echo=TRUE, message=TRUE, warning=FALSE,echo=TRUE}
+# Step 1: Find markers for all clusters
+DGE <- FindAllMarkers(obj, assay = "RNA", do.print = TRUE,
+                       logfc.threshold = 0.5, min.pct = 0.50, only.pos = TRUE)
+
+# Step 2: Define background genes as all genes expressed in the Seurat object
+background_genes <- rownames(GetAssayData(obj, assay = "RNA", slot = "counts"))[
+  Matrix::rowSums(GetAssayData(obj, assay = "RNA", slot = "counts") > 0) > 0
+]
+
+# Step 3: Create an empty list to store plots
+plots_list <- list()
+
+# Step 4: Iterate over each unique cluster
+for (current_cluster in unique(DGE$cluster)) {
+  
+  # Filter for significant genes in the current cluster
+  sig_genes <- DGE %>%
+    filter(cluster == current_cluster & p_val_adj < 0.05) %>%  # Use current_cluster
+    pull(gene)  # Extract gene names
+  
+  # Step 5: Run g:Profiler for pathway enrichment analysis
+  pathway_results <- gprofiler2::gost(
+    query = sig_genes,
+    ordered_query = TRUE,
+    correction_method = 'fdr',
+    custom_bg = background_genes,
+    sources = c("GO", "KEGG", "REACTOME")
+  )
+  
+  # Prepare the data for plotting
+  df_path <- as_tibble(pathway_results$result) %>%
+    filter(term_size < 3000, term_size > 10) %>%
+    filter(!term_id %in% unlist(pathway_results$parents))
+  
+  # Step 6: Plot top 5 results per database
+  Fig <- df_path %>%
+    group_by(source) %>%
+    slice_min(p_value, n = 10, with_ties = TRUE) %>%
+    ungroup() %>%
+    ggplot(aes(x = reorder(term_name, -p_value), y = -log10(p_value), fill = source)) +
+    geom_bar(stat = 'identity', position = position_identity()) +
+    coord_flip() +
+    theme_bw() +
+    labs(x = "") +
+    facet_grid(source ~ ., space = 'free', scales = 'free') +
+    theme(legend.position = 'none') +
+    ggtitle(paste("Pathway Enrichment for", current_cluster))  # Add title with cluster name
+  
+  # Store the plot in the list
+  plots_list[[current_cluster]] <- Fig
+}
+
+
+# build (if necessary) the “Gene DE” folder under outputs:
+output_dir <- here("output", "GO_genes")
+if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+
+# then in your loop:
+for (current_cluster in names(plots_list)) {
+  # display
+  print(plots_list[[current_cluster]])
+  
+  # build the full file path
+  file_path <- here("output", "GO_genes",
+                    paste0("pathway_enrichment_", current_cluster, ".pdf"))
+  
+  # save
+  ggsave(
+    filename = file_path,
+    plot     = plots_list[[current_cluster]],
+    width    = 10,
+    height   = 6
+  )
+}
+```
+
+## Low Quality clusters??
+
+Still nothing stands out. lets plot the MT content per cluster to see if
+there are any low quality clusters that can be removed?
+
+MT content per cluster
+
+```{r, eval=TRUE, echo=TRUE, message=TRUE, warning=FALSE,echo=TRUE,  fig.width=10, fig.height=5}
+# Violin plot of percent.mt by cluster
+VlnPlot(
+  object    = obj,
+  features  = "percent.mt",
+  pt.size   = 0.1
+) + 
+  geom_boxplot(width = 0.1, outlier.shape = NA, fill = NA) +
+  labs(y = "Percent mitochondrial reads", x = "Cluster") +
+  theme_minimal()
+
+```
+
+### Checked Marker genes again
+
+```{r, echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=15}
+#makers from 
+# https://www.sciencedirect.com/science/article/pii/S0896627319305616
+#https://pmc.ncbi.nlm.nih.gov/articles/PMC4583716/
+#https://www.pnas.org/doi/full/10.1073/pnas.1520760112 
+# oRG Markers
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("HOPX", "FAM107A", "PTPRZ1", "TNC", "LIFR", "MOXD1", "SDC3"), reduction = "umap.harm") # likely cluster 12 
+
+# vRG Markers
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("PAX6", "SOX2", "GLI3", "VIM", "CRYAB"), reduction = "umap.harm") 
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("PDGFD", "TAGLN2", "FBXO32", "PALLD"), reduction = "umap.harm") 
+
+#IP 
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("EOMES", "PENK", "SSTR2", "PPP1R17", "TBR1"), reduction = "umap.harm") 
+
+# Migrating excitatory  neurons 
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("NEUROD6", "POU3F2"), reduction = "umap.harm") # nothing really 
+
+# Microglia 
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("CCL3", "AIF1"), reduction = "umap.harm") # nothing really 
+
+# Deep layer  excitatory
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("SOX5"), reduction = "umap.harm") # nothing really 
+
+#Interneurons 
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("DLX1", "DLX2", "LHX6", "DLX5"), reduction = "umap.harm") # labels all neuron clusters 
+
+# Cycling Progenitors 
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("HMGB2", "SOX2", "MKI67", "PCNA"), reduction = "umap.harm") # Cluster 5 i think 
+
+# Markers of proliferation 
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("PAX6", "SOX2", "PTTG1", "CENPF", "POLD1", "NUF2"), reduction = "umap.harm") #Cluster 5 i think 
+
+# Endotheial cells 
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("ITMA2A", "CLDN5", "ESAM"), reduction = "umap.harm") 
+
+# In neurons CGE derived
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("CALB2", "DLX1", "DLX2"), reduction = "umap.harm") # clear signal form cluster 2 
+
+# In neurons MGE derived
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("LHX6", "NKX2-1"), reduction = "umap.harm") # no obvious signal 
+
+#sctype Neuroblast
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = c("NEUROD1","DCX","DLX2","PROX1","EOMES","TUBB3"), reduction = "umap.harm") # no obvious signal  
+
+neuroblast_markers <- c(
+  "DCX",        # Doublecortin
+  "NCAM",   # Polysialylated neural cell adhesion molecule
+  "TUBB3",      # β-III Tubulin
+  "NEUROD1",    # Neurogenic differentiation factor 1
+  "ELAVL4"      # HuD, an RNA-binding protein in immature neurons
+)
+
+DimPlot(obj, reduction = "umap.harm", label = T) |  FeaturePlot(obj, features = neuroblast_markers, reduction = "umap.harm") # no obvious signal 
+```
+
+## Label transfer
+
+### Lister sample
+
+```{r, echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=10, fig.height=5}
+library(Seurat)
+library(ggplot2)
+
+# ——— 1) Load reference and query Seurat objects ———
+ref   <- readRDS("/data/gpfs/projects/punim2510/lister_lab_17775_apr_9_2025/output_files/chuck_v_marcus_annotations/marcus_seurat_object_with_chuck_all_annotations.rds")
+query <- obj   # or if you have a separate file: readRDS("path/to/your/query.rds")
+
+# ——— 2) Make sure ref identities are set to your major clusters ———
+ref <- SetIdent(
+  object = ref,
+  value  = "major_clust"
+)
+
+# ——— 3) Select features for integration ———
+features <- SelectIntegrationFeatures(
+  object.list = list(ref, query),
+  nfeatures    = 2000
+)
+
+# ——— 4) Find anchors between reference and query ———
+anchors <- FindTransferAnchors(
+  reference         = ref,
+  query             = query,
+  features          = features,
+  reference.assay   = "RNA",
+  query.assay       = "RNA",
+  reference.reduction = "pca",
+  dims              = 1:30
+)
+
+# ——— 5) Transfer cell-type labels ———
+predictions <- TransferData(
+  anchorset = anchors,
+  refdata   = ref$major_clust,
+  dims      = 1:30
+)
+
+# ——— 6) Add transferred labels into your query object ———
+query <- AddMetaData(query, metadata = predictions)
+
+# ——— 7) Visualize label transfer ———
+DimPlot(
+  query,
+  group.by  = "predicted.id",
+  label     = FALSE,
+  reduction = "umap.harm"
+) + 
+  ggtitle("Label transfer from reference to query")
+
+```
+
+### Organoid Cortex samples
+
+```{r,  echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=10, fig.height=5}
+# ——— 1) Load reference and query Seurat objects ———
+ref   <- readRDS("/data/scratch/projects/punim1441/Project_cortex_organoid_LRsc/analysis/seurat_objects_with_iso_assya/merged_all_iso.rds")
+###### run PCA if i need to on meged ####
+# 1) Normalize
+ref <- NormalizeData(
+  object = ref,
+  verbose = FALSE
+)
+
+# 2) Find highly variable features
+ref <- FindVariableFeatures(
+  object = ref,
+  selection.method = "vst",
+  nfeatures = 2000,
+  verbose = FALSE
+)
+
+# 3) Scale all genes (center & scale)
+ref <- ScaleData(
+  object = ref,
+  verbose = FALSE
+)
+
+# 4) Run PCA
+ref <- RunPCA(
+  object = ref,
+  npcs = 30,
+  verbose = FALSE
+)
+
+ref <- FindNeighbors(
+  object = ref,
+  reduction = "pca",
+  dims = 1:20,
+  verbose = FALSE
+)
+
+# 7) Compute UMAP
+ref <- RunUMAP(
+  object = ref,
+  reduction = "pca",
+  dims = 1:20,
+  verbose = FALSE
+)
+
+DimPlot(ref, reduction = "umap", group.by = "cluster_annotations")
+
+
+# ——— 2) Make sure ref identities are set to your major clusters ———
+ref <- SetIdent(
+  object = ref,
+  value  = "cluster_annotations"
+)
+
+# ——— 3) Select features for integration ———
+features <- SelectIntegrationFeatures(
+  object.list = list(ref, query),
+  nfeatures    = 2000
+)
+
+# ——— 4) Find anchors between reference and query ———
+anchors <- FindTransferAnchors(
+  reference         = ref,
+  query             = query,
+  features          = features,
+  reference.assay   = "RNA",
+  query.assay       = "RNA",
+  reference.reduction = "pca",
+  dims              = 1:30
+)
+
+# ——— 5) Transfer cell-type labels ———
+predictions <- TransferData(
+  anchorset = anchors,
+  refdata   = ref$cluster_annotations,
+  dims      = 1:30
+)
+
+# ——— 6) Add transferred labels into your query object ———
+query <- AddMetaData(query, metadata = predictions)
+
+# ——— 7) Visualize label transfer ———
+DimPlot(
+  query,
+  group.by  = "predicted.id",
+  label     = T,
+  reduction = "umap.harm", 
+) + 
+  ggtitle("Label transfer from Cortex org reference to query")
+
+```
+
+## Clustify 
+
+### Org cortex ref
+
+```{r,  echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=10, fig.height=5}
+library(clustifyr)
+ref_cortex_org <-readRDS("/data/scratch/projects/punim1441/Project_cortex_organoid_LRsc/analysis/seurat_objects_with_iso_assya/merged_all_iso.rds")
+
+
+DefaultAssay(ref_cortex_org) <- "RNA" 
+pseudo_df <- as.data.frame(
+    AggregateExpression(
+      ref_cortex_org,
+      return.seurat = FALSE,
+      group.by      = "cluster_annotations",
+      assays        = "RNA",
+      slot = "counts"
+    )$RNA, 
+    stringsAsFactors = FALSE
+)
+
+res <- clustify(
+  input       = obj,   # or directly use counts_matrix+meta
+  ref_mat     = pseudo_df,     # genes × cells from Lake et al.
+  cluster_col = "seurat_clusters",
+  obj_out     = TRUE
+)
+
+DimPlot(res, group.by="type", label=TRUE, reduction = "umap.harm")
+
+```
+
+### Clustify with ref_cortex_dev.rda
+
+```{r,  echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=10, fig.height=5}
+load("/data/gpfs/projects/punim1441/FLAMES_202311/resources/ref_cortex_dev.rda")
+
+res <- clustify(
+input = obj,      # a Seurat object
+ref_mat = ref_cortex_dev,   # matrix of RNA-seq expression data for each cell type
+cluster_col = "seurat_clusters", # name of column in meta.data containing cell clusters
+obj_out = TRUE  # output Seurat object with cell type inserted as "type" column
+)
+
+DimPlot(res, group.by = 'type', label = T, reduction = "umap.harm")
+```
+
+### Clustify with Hodge public data
+
+```{r, echo=FALSE}
+# ----------------------------------------
+# 1) Load libraries & data
+# ----------------------------------------
+library(Seurat)
+library(clustifyr)
+library(hodge2019data)
+# ----------------------------------------
+# 2) Prepare raw_counts and sample2subtype
+# ----------------------------------------
+raw_counts      <- data_Hodge2019        # genes × samples
+sample_metadata <- metadata_Hodge2019     # rownames = sample IDs
+# The subtype label for each sample:
+sample2subtype  <- sample_metadata$cluster_label
+names(sample2subtype) <- rownames(sample_metadata)
+
+# Make sure ordering matches:
+stopifnot(all(colnames(raw_counts) == names(sample2subtype)))
+
+# ----------------------------------------
+# 3) Collapse 50-nuclei samples → 1 column per subtype
+# ----------------------------------------
+# rowsum() works on rows of a matrix, so transpose first:
+#   t(raw_counts)     ⇒ samples × genes
+#   rowsum(..., group=sample2subtype) ⇒ one row per Inh subtype (sums)
+#   / table(sample2subtype)           ⇒ convert sums → means
+#   t(...)            ⇒ back to genes × subtype
+ref_mat_clusters <- t(
+  rowsum(
+    x     = t(raw_counts),
+    group = sample2subtype,
+    reorder = FALSE
+  ) / as.vector(table(sample2subtype))
+)
+
+# Inspect
+dim(ref_mat_clusters)      # should be (#genes) × (# unique Inh subtypes)
+colnames(ref_mat_clusters) # “Inh1”, “Inh2”, … “Inh8”
+
+# ----------------------------------------
+# 4) Normalize reference (CPM → log1p)
+# ----------------------------------------
+cpm_mat  <- sweep(ref_mat_clusters, 2, colSums(ref_mat_clusters), FUN = "/") * 1e6
+ref_norm <- log1p(cpm_mat)
+
+# ----------------------------------------
+# 5) Run clustifyr on your Seurat object
+# ----------------------------------------
+
+# Perform the correlation‐based label transfer
+res <- clustify(
+  input       = obj,
+  ref_mat     = ref_norm,             # or ref_mat_clusters for raw means
+  cluster_col = "seurat_clusters",    # your query’s meta.data column
+  obj_out     = TRUE
+)
+
+# ----------------------------------------
+# 6) Inspect & save
+# ----------------------------------------
+# Plot UMAP colored by your new `type` labels
+DimPlot(res, group.by = "type", label = TRUE, reduction = "umap.harm")
+
+# Save the annotated object
+#saveRDS(res, file = "annotated_with_hodge_interneurons.rds")
+
+```
+
+```{r echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=10, fig.height=5}
+# 2) Prepare raw_counts & sample2cluster
+# ----------------------------------------
+raw_counts      <- data_Hodge2019
+sample2cluster  <- metadata_Hodge2019$class
+names(sample2cluster) <- rownames(metadata_Hodge2019)
+
+# Ensure column order matches
+stopifnot(all(colnames(raw_counts) == names(sample2cluster)))
+
+# ----------------------------------------
+# 3) Collapse 50-nuclei samples → one column per cluster
+# ----------------------------------------
+ref_mat_clusters <- t(
+  rowsum(
+    x     = t(raw_counts),
+    group = sample2cluster,
+    reorder = FALSE
+  ) / as.vector(table(sample2cluster))
+)
+
+# Now colnames(ref_mat_clusters) are your 35 cell-type labels
+dim(ref_mat_clusters)
+head(colnames(ref_mat_clusters))
+
+# ----------------------------------------
+# 4) Normalize (CPM → log1p) or Z-score
+# ----------------------------------------
+cpm_mat  <- sweep(ref_mat_clusters, 2, colSums(ref_mat_clusters), FUN = "/") * 1e6
+ref_norm <- log1p(cpm_mat)
+# Or: ref_z <- t(scale(t(cpm_mat)))    # equal-weight each gene
+
+
+res <- clustify(
+  input       = obj,
+  ref_mat     = ref_norm,             # broad ref of all 35 cell types
+  cluster_col = "seurat_clusters",    # your query’s cluster IDs
+  obj_out     = TRUE
+)
+
+# ----------------------------------------
+# 6) Visualize & save
+# ----------------------------------------
+DimPlot(res, group.by="type", label=TRUE, reduction="umap.harm")
+#saveRDS(res, "annotated_broad_Hodge2019.rds")
+
+```
+
+### Lister sample 
+
+```{r  echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=10, fig.height=5}
+#lets try chucks ref
+chuck_ref <- readRDS(here("data", "L1777_pseudobulk_normalised_aggregate_counts.rds"))
+chuck_ref$gene <- NULL
+chuck_ref <- as.matrix(chuck_ref)
+
+res <- clustify(
+  input       = obj,   # or directly use counts_matrix+meta
+  ref_mat     = chuck_ref,     # genes × cells from Lake et al.
+  cluster_col = "seurat_clusters",
+  obj_out     = TRUE
+)
+DimPlot(res, group.by="type", label=TRUE, reduction = "umap.harm")
+
+```
+
+## Finally Module score
+
+### My list 
+
+```{r,  echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=10, fig.height=5}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+
+# 1) Define all marker lists
+marker_lists <- list(
+
+  # Neuroepithelial / Early Progenitors
+  Neuroepithelial    = c("SOX2","PAX6","NES","HES1","LIN28A","ZIC1","FOXG1"),
+  aRG_vRG            = c("HES1","VIM","PAX6","SOX2","FABP7"),
+  oRG                = c("HOPX","FAM107A","PTPRZ1","CRYAB","LGALS3"),
+  RG_Cycling         = c("MKI67","PCNA","TOP2A","CDK1","CCNB1"),
+
+  # Intermediate (Basal) Progenitors
+  IPc                = c("EOMES","NEUROD1","TBR1","NEUROG2","HES6"),
+
+  # Early Post-mitotic Neuroblasts
+  Neuroblasts        = c("DCX","PSA-NCAM","STMN2","STMN4","TUBB3","NEUROD6"),
+
+  # Interneuron lineages
+  MGE_IN             = c("NKX2-1","LHX6","SOX6","ZEB2","SATB1","ERBB4"),
+  CGE_IN             = c("SP8","PROX1","NR2F2","GAD2", "CALB2", "RELN"),
+
+  # Interneuron maturation states
+  IN_Immature        = c("DCX","NCAM1","STMN2","NEUROD6", "GAD1", "GAD2"),
+  SST_Neurons        = c("SST","GAD1","GAD2","NPY","CRHBP"),
+  PVALB_Neurons      = c("PVALB","KCNC1","SLC32A1","GAD1","GAD2"),
+  VIP_Neurons        = c("VIP","CALB2","CPLX3","GAD1","GAD2"),
+  LAMP5_NOS1         = c("LAMP5","RELN","NDNF","NOS1","GAD1","GAD2"),
+
+  # Excitatory neurons general + layer-specific
+  Excitatory_General = c("SLC17A7","CAMK2A","GRIA1","NEUROD6","TBR1", "SLC17A7", "SLC17A6"),
+  Ex_L2_3            = c("CUX2","SATB2","UNC5D","MDGA1","SYT2"),
+  Ex_L4              = c("RORB","NECTIN3","KCND2","RIT2","PCSK1N"),
+  Ex_L5              = c("FEZF2","BCL11B","TCF21","ETV1","KCNS1"),
+  Ex_L6              = c("FOXP2","TLE4","TLE1","NUAK1","CRIP2"),
+
+  # Glial lineages
+  Astro_Progenitors  = c("ALDH1L1","SLC1A3","S100B","GJA1","FGFR3"),
+  OPC_Progenitors    = c("PDGFRA","CSPG4","VCAN","OLIG1","NKX2-2"),
+  Oligo_Mature       = c("MBP","PLP1","MOG","CNP","MAG"),
+
+  # Other non-neuronal options
+  Microglia          = c("TMEM119","P2RY12","CX3CR1","C1QA","AIF1"),
+  Endothelial        = c("CLDN5","VWF","FLT1","PECAM1","CDH5"),
+  
+  # Cell cycle scores
+  CellCycle_S        = cc.genes$s.genes,
+  CellCycle_G2M      = cc.genes$g2m.genes
+)
+
+
+# 2) Add module scores
+seurat_obj <- AddModuleScore(
+  object   = obj,
+  features = marker_lists,
+  name     = names(marker_lists)
+)
+
+# 1) Reconstruct the exact score column names
+score_cols <- paste0(names(marker_lists), seq_along(marker_lists))
+score_cols <- intersect(score_cols, colnames(seurat_obj@meta.data))
+
+# Loop over each module score and plot
+for (mod in score_cols) {
+  p <- VlnPlot(
+    object   = seurat_obj,
+    features = mod,
+  ) +
+    # add horizontal zero line
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+    # add median bar
+    stat_summary(
+      fun = median,
+      geom = "crossbar",
+      width = 0.2,
+      color = "black",
+      size = 0.3
+    ) +
+    labs(
+      title = paste0("Module score: ", mod),
+      x     = "Cluster",
+      y     = "Score"
+    ) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      plot.title  = element_text(hjust = 0.5)
+    )
+  print(p)
+}
+```
+
+### Module score from sctype_db
+
+```{r}
+
+marker_lists <- list(
+  GABAergic_neurons          = c("SLC6A1","GABBR1","GABBR2","GAD2","GAD1","SLC32A1"),
+  Glutamatergic_neurons      = c("SLC17A7","SLC17A6","GRIN1","GRIN2B","GLS","GLUL","GRIN2A"),
+  Immature_neurons           = c("DCX","NEUROD1","TBR1","STMN1","NCAM1","TUBB3"),
+  Immune_system_cells        = c("MS4A1","CCR6","CXCR3","CD4","IL2RA","ISG20","TNFRSF8","Trac","Ltb","Cd52"),
+  Mature_neurons             = c("RBFOX3","MAP2","SYP","DLG4","TUBB3","MAPT","INA","GAP43","NRP1"),
+  Microglial_cells           = c("P2RY12","ITGAM","CD40","PTPRC","CD68","AIF1","CX3CR1","TMEM119",
+                                 "ADGRE1","C1QA","NOS2","TNF","ISYNA1","CCL4","ADORA3","ADRB2",
+                                 "BHLHE41","BIN1","KLF2","NAV3","RHOB","SALL1","SIGLEC8","SLC1A3",
+                                 "SPRY1","TAL1"),
+  Myelinating_Schwann_cells  = c("SOX10","EGR2","MBP","MPZ"),
+  Neural_Progenitor_cells    = c("CSPG4","RNF5","EOMES","SOX2","SOX1","NES","PAX3","PAX6",
+                                 "OTX2","CNTNAP1","ASCL1","SMARCA4","MSI1","MSI2"),
+  Neural_stem_cells          = c("SOX2","PROM1","NES","SOX9"),
+  Neuroblasts                = c("NEUROD1","DCX","DLX2","PROX1","EOMES","TUBB3"),
+  Neuroepithelial_cells      = c("NES","SOX2","NOTCH1","HES1","HES3","CDH1","OCLN","SOX10")
+)
+
+
+# 2) Add module scores
+seurat_obj <- AddModuleScore(
+  object   = obj,
+  features = marker_lists,
+  name     = names(marker_lists)
+)
+
+# 1) Reconstruct the exact score column names
+score_cols <- paste0(names(marker_lists), seq_along(marker_lists))
+score_cols <- intersect(score_cols, colnames(seurat_obj@meta.data))
+
+# Loop over each module score and plot
+for (mod in score_cols) {
+  p <- VlnPlot(
+    object   = seurat_obj,
+    features = mod,
+  ) +
+    # add horizontal zero line
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+    # add median bar
+    stat_summary(
+      fun = median,
+      geom = "crossbar",
+      width = 0.2,
+      color = "black",
+      size = 0.3
+    ) +
+    labs(
+      title = paste0("Module score: ", mod),
+      x     = "Cluster",
+      y     = "Score"
+    ) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      plot.title  = element_text(hjust = 0.5)
+    )
+  print(p)
+}
+```
+
+## Current Annotation
+
+After all this work this is what im going for. Its not perfect but
+that's because the cells aren't perfect. Can revisit/update if need be
+but for now this is good enough i think.
+
+```{r, paged.print=TRUE, fig.width=25, fig.height=5}
+# 1) Define your three annotation vectors
+broad_type <- c(
+  `0`  = "Mature neurons",      # Mature IN cluster 1 (CORT)
+  `1`  = "Stem cells",           # Stem cells
+  `2`  = "Early neurons",      # CGE dev IN (SP8, CALB2) – but already mature marker expression
+  `3`  = "Radial‐glial",         # aRG
+  `4`  = "Mature neurons",      # Mature IN cluster 3 (EBF1, RELN, FOXP1)
+  `5`  = "Radial‐glial",         # aRG (cycling)
+  `6`  = "Mature neurons",      # Mature IN cluster 2
+  `7`  = "Stem cells",           # Stem cells
+  `8`  = "Mature neurons",      # SST IN
+  `9`  = "Early neurons",       # Immature mitotic IN
+  `10` = "Glial progenitor (??)",         # Early glial precursor
+  `11` = "Early neurons",       # Early post‐mitotic IN
+  `12` = "Radial‐glial",         # oRG
+  `13` = "Early neurons",       # IP (EOMES, TBR2, SLC17A6)
+  `14` = "Mature neurons"       # Unknown IN/EX (mixed → treat as mature)
+)
+
+intermediate_type <- c(
+  `0`  = "Mature inhibitory neuron",
+  `1`  = "Stem cells",
+  `2`  = "Developing interneuron",
+  `3`  = "RG (non‐cycling)",
+  `4`  = "Mature inhibitory neuron",
+  `5`  = "RG (cycling)",
+  `6`  = "Mature inhibitory neuron",
+  `7`  = "Stem cells",
+  `8`  = "Mature inhibitory neuron",
+  `9`  = "Immature inhibitory neuron",
+  `10` = "Glial progenitor",
+  `11` = "Post‐mitotic interneuron",
+  `12` = "oRG",
+  `13` = "Excitatory intermediate progenitor",
+  `14` = "Mixed inhibitory/excitatory"
+)
+
+detailed_type <- c(
+  `0`  = "Mature IN cluster 1 (CORT)",
+  `1`  = "Stem cells",
+  `2`  = "CGE dev IN (SP8, CALB2)",
+  `3`  = "aRG",
+  `4`  = "Mature IN cluster 3 (EBF1, RELN, FOXP1)",
+  `5`  = "aRG (cycling)",
+  `6`  = "Mature IN cluster 2 (FOXP2 ??)",
+  `7`  = "Stem cells",
+  `8`  = "SST IN",
+  `9`  = "Immature mitotic IN",
+  `10` = "Early glial precursor (NFIA⁺/HEY1⁺, PDGFRA⁺)",
+  `11` = "Early post‐mitotic IN",
+  `12` = "oRG",
+  `13` = "IP (EOMES, TBR2, SLC17A6)",
+  `14` = "Unknown IN/EX neurons (FOXP2, GAD1, GAD2)"
+)
+
+# 2) Map them onto your Seurat object metadata
+#    assume your active identities are the original numeric cluster IDs
+obj@meta.data$BroadType        <- broad_type[ as.character(Idents(obj)) ]
+obj@meta.data$IntermediateType <- intermediate_type[ as.character(Idents(obj)) ]
+obj@meta.data$DetailedType     <- detailed_type[ as.character(Idents(obj)) ]
+
+DimPlot(obj, group.by = c("BroadType", "IntermediateType", "DetailedType"), reduction = "umap.harm", label = F)
+```
+
+## save the files
+
+```{r}
+
+  qs2::qs_save(
+    obj,
+    file   = here("output", "seurat_objects", "seurat_filt_harm_annotated.qs"))
+```
+
+
+

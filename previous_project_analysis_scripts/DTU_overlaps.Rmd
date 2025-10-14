@@ -1,0 +1,229 @@
+---
+title: "dturlte_analysis_after_job"
+author: "Sefi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(qs)
+library(DTUrtle)
+library(Seurat)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+library(qs2)
+library(dplyr)
+library(purrr)
+library(here)
+
+# Base directory
+base_dir <- here("output/output/DTurtel_job/")
+
+# List only the processed .qs files (exclude *_raw.qs)
+dtu_files <- list.files(
+  base_dir,
+  pattern = "dturtle_.*\\.qs$",
+  recursive = TRUE,
+  full.names = TRUE
+) %>%
+  .[!grepl("_raw\\.qs$", .)]   # remove raw files
+
+# Check list
+dtu_files
+
+```
+
+## Including Plots
+```{r pressure, echo=FALSE}
+# Read and collect isoform IDs
+library(qs2)
+
+
+# Read in all processed dturtle objects
+dt_list <- lapply(dtu_files, qs_read)
+
+# Name each element by the contrast (folder name or file name)
+names(dt_list) <- basename(dtu_files)
+
+# Check what’s inside the first object
+names(dt_list[[1]])
+
+
+# Extract significant isoforms per contrast
+sig_list <- map(dt_list, ~ .x$sig_tx)
+
+# Per-contrast counts
+contrast_counts <- map_int(sig_list, length) %>%
+  tibble(contrast = names(.), n_sig_isoforms = .)
+
+# Unique isoforms across all contrasts
+all_isoforms <- unique(unlist(sig_list))
+total_unique <- length(all_isoforms)
+
+# Results
+contrast_counts
+cat("Total unique DTU isoforms across all contrasts:", total_unique, "\n")
+```
+```{r}
+# Extract significant genes per contrast
+gene_list <- map(dt_list, ~ .x$sig_gene)
+
+# Count how many significant genes per contrast
+gene_counts <- map_int(gene_list, length) %>%
+  tibble(contrast = names(.), n_sig_genes = .)
+
+# Unique significant genes across all contrasts
+all_genes <- unique(unlist(gene_list))
+total_unique_genes <- length(all_genes)
+
+# Results
+gene_counts
+cat("Total unique significant genes across all contrasts:", total_unique_genes, "\n")
+
+```
+
+```{r}
+# Search across all contrasts for PKM isoforms
+pkm_hits <- map(sig_list, ~ grep("PKM", .x, value = TRUE))
+
+# Show which contrasts have PKM hits
+pkm_hits[sapply(pkm_hits, length) > 0]
+```
+
+
+# overlapp between 
+```{r}
+#read in isoforms switch results 
+time_dtu <-read.csv(here("output/DTU/time_dtu.csv"))
+colnames(time_dtu)
+
+time_iso_df <- time_dtu %>%
+  filter(isoform_switch_q_value < 0.01) %>%
+  group_by(condition_1, condition_2) %>%
+  summarise(sig_isoforms = list(unique(isoform_id)), .groups = "drop") %>%
+  mutate(contrast = paste(condition_1, "vs", condition_2)) %>%
+  select(contrast, sig_isoforms)
+```
+
+```{r}
+library(dplyr)
+library(purrr)
+library(tibble)
+
+qs_iso_df <- map_dfr(
+  sig_list,
+  ~ {
+    # If it's already a vector of IDs
+    if (is.atomic(.x)) {
+      tibble(sig_isoforms = list(unique(.x)))
+    } 
+    # If it's a data.frame with transcript_id column
+    else if (is.data.frame(.x) && "transcript_id" %in% names(.x)) {
+      tibble(sig_isoforms = list(unique(.x$transcript_id)))
+    } 
+    else {
+      tibble(sig_isoforms = list(character()))
+    }
+  },
+  .id = "contrast"
+)
+
+qs_iso_df
+library(stringr)
+library(dplyr)
+qs_iso_df <- qs_iso_df %>%
+  mutate(
+    sig_isoforms = lapply(sig_isoforms, function(vec) {
+      unique(str_replace(vec, "-.*$", ""))   # drop everything after first '-'
+    })
+  )
+
+qs_iso_df$contrast
+time_iso_df$contrast
+head(qs_iso_df$sig_isoforms[[1]], 10)
+head(time_iso_df$sig_isoforms[[1]], 10)
+
+# Clean up qs_iso_df contrast names
+qs_iso_df <- qs_iso_df %>%
+  mutate(contrast = contrast %>%
+           gsub("^dturtle_", "", .) %>%   # remove prefix
+           gsub("\\.qs$", "", .) %>%      # remove .qs suffix
+           gsub("_vs_", " vs ", .))       # replace underscores with spaces
+
+# Now check
+qs_iso_df$contrast
+time_iso_df$contrast
+```
+
+
+```{r}
+normalize_contrast <- function(x) {
+  sapply(strsplit(x, " vs "), function(parts) {
+    paste(sort(parts), collapse = " vs ")
+  })
+}
+
+
+qs_iso_df$contrast   <- normalize_contrast(qs_iso_df$contrast)
+time_iso_df$contrast <- normalize_contrast(time_iso_df$contrast)
+
+# Check
+qs_iso_df$contrast
+time_iso_df$contrast
+```
+
+
+```{r}
+library(dplyr)
+library(purrr)
+
+#--- Per-contrast overlap ---
+overlap_df <- inner_join(
+  qs_iso_df, time_iso_df,
+  by = "contrast",
+  suffix = c("_qs", "_time")
+) %>%
+  rowwise() %>%
+  mutate(
+    n_qs       = length(sig_isoforms_qs),
+    n_time     = length(sig_isoforms_time),
+    n_overlap  = length(intersect(sig_isoforms_qs, sig_isoforms_time)),
+    n_union    = length(union(sig_isoforms_qs, sig_isoforms_time)),
+    jaccard    = ifelse(n_union > 0, n_overlap / n_union, NA_real_)
+  ) %>%
+  ungroup()
+
+#--- Overall overlap across all contrasts ---
+all_qs   <- unique(unlist(qs_iso_df$sig_isoforms))
+all_time <- unique(unlist(time_iso_df$sig_isoforms))
+
+overall_overlap <- tibble(
+  contrast   = "Overall",
+  n_qs       = length(all_qs),
+  n_time     = length(all_time),
+  n_overlap  = length(intersect(all_qs, all_time)),
+  n_union    = length(union(all_qs, all_time)),
+  jaccard    = length(intersect(all_qs, all_time)) / length(union(all_qs, all_time))
+)
+
+#--- Combine into one result table ---
+final_overlap <- bind_rows(overlap_df, overall_overlap)
+
+final_overlap
+
+
+```
+
+```{r}
+saveRDS(final_overlap,
+        here("output/DTU/overlap_isoforms_qs_dturtle_vs_time_isoswitch.rds"))
+
+
+```

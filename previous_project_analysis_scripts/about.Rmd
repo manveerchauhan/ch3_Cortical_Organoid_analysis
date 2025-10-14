@@ -1,0 +1,19 @@
+---
+site: workflowr::wflow_site
+title: "About"
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: textmate
+---
+
+Describe your project.
+
+FLAMES analysis for FLAMESv2 paper. Workflow will follow the tutorial found here:  https://sefi196.github.io/FLAMESv2_LR_sc_tutorial/setup.html 
+
+
+
+
+

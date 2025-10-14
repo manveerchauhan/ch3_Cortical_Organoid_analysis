@@ -1,0 +1,367 @@
+---
+site: workflowr::wflow_site
+title: "geneQC"
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: textmate
+    code_folding: show
+---
+
+
+## GeneQC
+```{r, message=TRUE, warning=TRUE, include=FALSE, paged.print=TRUE}
+library(here)
+library(qs)
+source(here("code","gene_QC_function.R"))
+```
+
+Read in Files from counts folder and store as vector list
+```{r read_gene_counts, message=FALSE, warning=FALSE, include=FALSE, echo=TRUE}
+# 1) List all files ending in "_gene_symbol.csv" under data/gene_counts/
+csv_files <- list.files(
+  path       = here("data","gene_counts"),
+  pattern    = "_gene_symbol\\.csv$",
+  full.names = TRUE
+)
+
+# 2) Extract sample names by stripping off the "_gene_symbol.csv" suffix
+#    e.g. "data/gene_counts/C1_STC_gene_symbol.csv" → "C1_STC"
+sample_names <- sub("_gene_symbol\\.csv$", "", basename(csv_files))
+
+# 3) Read each CSV into a data.frame (you can adjust read.csv arguments as needed).
+#    Here we assume the first column is row names (gene IDs) and the rest are cell counts.
+result_list <- setNames(
+  lapply(csv_files, function(path) {
+    # If your CSV has gene IDs in the first column and no header for row names:
+    df <- read.csv(path, row.names = 1, check.names = FALSE)
+    # If you prefer a raw matrix (instead of data.frame):
+    # df <- as.matrix(read.csv(path, row.names = 1, check.names = FALSE))
+    return(df)
+  }),
+  sample_names
+)
+```
+
+
+### C1STC
+```{r C1_STC, echo = TRUE, results='hide', message   = FALSE, warning   = FALSE,  fig.show  = 'hide', cache=TRUE}
+
+C1_STC <- perform_qc_filtering(
+     count.matrix = result_list[["C1_STC_matched_reads_gene_count"]],
+     min.features  = 3000,
+     max.features  = 1000000,
+     min.counts    = 1000,
+     max.counts    = 100000,
+     npc           = 15,
+     cluster_res   = 0.5,
+     project       = "C1_STC",
+     MT            = 10,
+     doublet_rate  = 0.039
+     )
+```
+
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=5}
+print(C1_STC$pre_qc_panel)
+
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=15}
+print(C1_STC$post_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=5, fig.height=5}
+print(C1_STC$doublet_table)
+print(C1_STC$summary_metrics_df)
+```
+
+
+### C4STC
+```{r C4_STC, echo = TRUE, results='hide', message   = FALSE, warning   = FALSE,  fig.show  = 'hide', cache=TRUE}
+
+C4_STC <- perform_qc_filtering(
+     count.matrix = result_list[["C4_STC_matched_reads_gene_count"]],
+     min.features  = 3000,
+     max.features  = 1000000,
+     min.counts    = 1000,
+     max.counts    = 100000,
+     npc           = 15,
+     cluster_res   = 0.5,
+     project       = "C4_STC",
+     MT            = 10,
+     doublet_rate  = 0.039
+     )
+```
+
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=5}
+print(C4_STC$pre_qc_panel)
+
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=15}
+print(C4_STC$post_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=5, fig.height=5}
+print(C4_STC$doublet_table)
+print(C4_STC$summary_metrics_df)
+```
+
+
+### C2_Day25
+```{r C2_Day25, echo = TRUE, results='hide', message   = FALSE, warning   = FALSE,  fig.show  = 'hide', cache=TRUE}
+
+C2_Day25 <- perform_qc_filtering(
+     count.matrix = result_list[["C2_Day25_matched_reads_gene_count"]],
+     min.features  = 3000,
+     max.features  = 1000000,
+     min.counts    = 1000,
+     max.counts    = 100000,
+     npc           = 15,
+     cluster_res   = 0.5,
+     project       = "C2_Day25",
+     MT            = 10,
+     doublet_rate  = 0.039
+     )
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=5}
+print(C2_Day25$pre_qc_panel)
+
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=15}
+print(C2_Day25$post_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=5, fig.height=5}
+print(C2_Day25$doublet_table)
+print(C2_Day25$summary_metrics_df)
+```
+
+### C5_Day25
+```{r C5_Day25, echo = TRUE, results='hide', message   = FALSE, warning   = FALSE,  fig.show  = 'hide', cache=FALSE}
+
+C5_Day25 <- perform_qc_filtering(
+     count.matrix = result_list[["C5_Day25_matched_reads_gene_count"]],
+     min.features  = 4000,
+     max.features  = 1000000,
+     min.counts    = 1000,
+     max.counts    = 100000,
+     npc           = 15,
+     cluster_res   = 0.5,
+     project       = "C5_Day25",
+     MT            = 10,
+     doublet_rate  = 0.039
+     )
+```
+
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=5}
+print(C5_Day25$pre_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=15}
+print(C5_Day25$post_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=5, fig.height=5}
+print(C5_Day25$doublet_table)
+print(C5_Day25$summary_metrics_df)
+```
+
+
+### C2_Day55
+```{r C2_Day55, echo = TRUE, results='hide', message   = FALSE, warning   = FALSE,  fig.show  = 'hide', cache=FALSE}
+
+C2_Day55 <- perform_qc_filtering(
+     count.matrix = result_list[["C2_Day55_matched_reads_gene_count"]],
+     min.features  = 3000,
+     max.features  = 1000000,
+     min.counts    = 1000,
+     max.counts    = 100000,
+     npc           = 15,
+     cluster_res   = 0.5,
+     project       = "C2_Day55",
+     MT            = 10,
+     doublet_rate  = 0.039
+     )
+```
+
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=5}
+print(C2_Day55$pre_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=15}
+print(C2_Day55$post_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=5, fig.height=5}
+print(C2_Day55$doublet_table)
+print(C2_Day55$summary_metrics_df)
+```
+
+
+### C3_Day55
+```{r C3_Day55, echo = TRUE, results='hide', message   = FALSE, warning   = FALSE,  fig.show  = 'hide', cache=FALSE}
+
+C3_Day55 <- perform_qc_filtering(
+     count.matrix = result_list[["C3_Day55_matched_reads_gene_count"]],
+     min.features  = 3000,
+     max.features  = 1000000,
+     min.counts    = 1000,
+     max.counts    = 100000,
+     npc           = 15,
+     cluster_res   = 0.5,
+     project       = "C3_Day55",
+     MT            = 10,
+     doublet_rate  = 0.039
+     )
+```
+
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=5}
+print(C3_Day55$pre_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=15}
+print(C3_Day55$post_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=5, fig.height=5}
+print(C3_Day55$doublet_table)
+print(C3_Day55$summary_metrics_df)
+```
+
+
+### C3_Day80
+```{r C3_Day80, echo = TRUE, results='hide', message   = FALSE, warning   = FALSE,  fig.show  = 'hide', cache=FALSE}
+
+C3_Day80 <- perform_qc_filtering(
+     count.matrix = result_list[["C3_Day80_matched_reads_gene_count"]],
+     min.features  = 3000,
+     max.features  = 1000000,
+     min.counts    = 1000,
+     max.counts    = 100000,
+     npc           = 15,
+     cluster_res   = 0.5,
+     project       = "C3_Day80",
+     MT            = 10,
+     doublet_rate  = 0.039
+     )
+```
+
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=5}
+print(C3_Day80$pre_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=15}
+print(C3_Day80$post_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=5, fig.height=5}
+print(C3_Day80$doublet_table)
+print(C3_Day80$summary_metrics_df)
+```
+
+
+### C5_Day80
+```{r C5_Day80, echo = TRUE, results='hide', message   = FALSE, warning   = FALSE,  fig.show  = 'hide', cache=FALSE}
+
+C5_Day80 <- perform_qc_filtering(
+     count.matrix = result_list[["C5_Day80_matched_reads_gene_count"]],
+     min.features  = 3000,
+     max.features  = 1000000,
+     min.counts    = 1000,
+     max.counts    = 100000,
+     npc           = 15,
+     cluster_res   = 0.5,
+     project       = "C5_Day80",
+     MT            = 10,
+     doublet_rate  = 0.039
+     )
+```
+
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=5}
+print(C5_Day80$pre_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=15}
+print(C5_Day80$post_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=5, fig.height=5}
+print(C5_Day80$doublet_table)
+print(C5_Day80$summary_metrics_df)
+```
+
+
+#### save all files to output/gene_QC
+```{r save_all_QC_outputs, echo = TRUE, results='hide', message   = FALSE, warning   = FALSE,  fig.show  = 'hide'}
+## save_all_QC_outputs chunk
+sample_names <- c(
+  "C1_STC",
+  "C4_STC",
+  "C2_Day25",
+  "C5_Day25",
+  "C2_Day55",
+  "C3_Day55",
+  "C3_Day80",
+  "C5_Day80"
+)
+
+
+qc_results  <- mget(sample_names, envir = .GlobalEnv)
+
+
+
+for (nm in sample_names) {
+  res <- qc_results[[nm]]
+
+  # 1) Save the full QC object
+  qsave(
+    res,
+    file   = here("output", "gene_QC",    paste0(nm, "_qc_results.qs")),
+    preset = "fast"
+  )
+
+  # 2) Extract the embedded Seurat object (4th element)
+  seurat_obj <- res[[4]]
+  
+  # 2b) Also save it under the new name "<sample>_singlet_filt_seurat.qs"
+  qsave(
+    seurat_obj,
+    file   = here("output", "seurat_objects", paste0(nm, "_singlet_filt_seurat.qs")),
+    preset = "fast"
+  )
+
+  # 3) Write out the QC panel plots
+  pdf(
+    file   = here("output", "gene_QC", paste0(nm, "_QC_panels.pdf")),
+    width  = 10,
+    height = 10
+  )
+  print(res$pre_qc_panel)
+  print(res$post_qc_panel)
+  dev.off()
+
+  # 4) Export the summary & doublet tables
+  write.csv(
+    res$summary_metrics_df,
+    file      = here("output", "gene_QC", paste0(nm, "_summary_metrics.csv")),
+    row.names = FALSE
+  )
+  write.csv(
+    res$doublet_table,
+    file      = here("output", "gene_QC", paste0(nm, "_doublet_table.csv")),
+    row.names = FALSE
+  )
+}
+```

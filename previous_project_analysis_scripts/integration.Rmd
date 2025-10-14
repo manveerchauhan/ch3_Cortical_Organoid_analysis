@@ -1,0 +1,191 @@
+---
+site: workflowr::wflow_site
+title: "integration"
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: textmate
+    code_folding: show
+---
+
+
+
+```{r setup, message=FALSE, warning=FALSE, include=FALSE, echo=TRUE}
+library(rtracklayer)
+library(Seurat)
+library(DropletUtils)
+library(gridExtra)
+library(data.table)
+library(BiocParallel)
+library(celda)
+library(SingleCellExperiment)
+library(DoubletFinder)
+library(stringr)
+library(cowplot)
+library(grid)
+library(patchwork)
+library(tidyverse)
+library(here)
+library(qs2)
+library(dplyr)
+```
+
+
+```{r load files , echo=FALSE}
+sample_names <- c(
+  "C1_STC",
+  "C4_STC",
+  "C2_Day25",
+  "C5_Day25",
+  "C2_Day55",
+  "C3_Day55",
+  "C3_Day80",
+  "C5_Day80"
+)
+
+umap_objects <- setNames(
+  lapply(sample_names, function(nm) {
+    qread(
+      here(
+        "output", "seurat_objects",
+        paste0(nm, "_singlet_filt_seurat.qs")
+      )
+    )
+  }),
+  sample_names
+)
+```
+
+
+
+## Merge samples 
+```{r, message=FALSE, warning=FALSE, include=FALSE, echo=TRUE}
+
+# intergrate samples  
+#from the fucntion above pull the filtered seurat object 
+
+merged_seurat <- merge(
+  umap_objects[["C1_STC"]],
+  y = list(
+    umap_objects[["C4_STC"]],
+    umap_objects[["C2_Day25"]],
+    umap_objects[["C5_Day25"]],
+    umap_objects[["C2_Day55"]],
+    umap_objects[["C3_Day55"]],
+    umap_objects[["C3_Day80"]],
+    umap_objects[["C5_Day80"]]
+  ),
+  add.cell.ids = c(
+    "C1_STC", "C4_STC", "C2_Day25", "C5_Day25",
+    "C2_Day55", "C3_Day55", "C3_Day80", "C5_Day80"
+  ), 
+  project = "Multi-sample_tutorial"
+  )
+
+# create a sample column
+merged_seurat$sample <- rownames(merged_seurat@meta.data)
+
+## split sample column to makw a batch col
+merged_seurat@meta.data <- separate(merged_seurat@meta.data, col = 'sample', into = c('batch', 'Day', 'Barcode'), 
+                                    sep = '_')
+#check some QC metrics 
+VlnPlot(merged_seurat, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = "Day") + 
+  plot_annotation(title = "Vln plots grouped by Day")
+
+#can plot based on any metadat col
+#VlnPlot(merged_seurat, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = "orig.ident")
+
+# Number of cells per group
+table(merged_seurat$orig.ident)
+table(merged_seurat$Day)
+
+# Apply normal preprocessing steps to merged file 
+
+merged_seurat <- NormalizeData(object = merged_seurat)
+merged_seurat <- FindVariableFeatures(object = merged_seurat)
+merged_seurat <- ScaleData(object = merged_seurat) 
+merged_seurat <- RunPCA(object = merged_seurat)
+ElbowPlot(merged_seurat)
+ElbowPlot(merged_seurat)
+merged_seurat <- FindNeighbors(object = merged_seurat, dims = 1:20)
+merged_seurat <- FindClusters(object = merged_seurat, resolution = 0.6)
+merged_seurat <- RunUMAP(object = merged_seurat, dims = 1:30)
+
+##save merged object
+  qsave(
+    merged_seurat,
+    file   = here("output", "seurat_objects", "merged_seurat_filt_seurat.qs"),
+    preset = "fast"
+  )
+
+#here("output", "seurat_objects", 
+#saveRDS(merged_seurat, file = "./output_files/mutli_sample/merged_seurat.rds")
+
+
+```
+
+
+
+```{r merged_plots , echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=10, fig.height=5}
+#Lets plot the merged file. 
+p1 <- FeaturePlot(merged_seurat, reduction = 'umap', features = 'nCount_RNA')
+p2 <- FeaturePlot(merged_seurat, reduction = "umap", features = 'nFeature_RNA')
+p3 <- DimPlot(merged_seurat, reduction = 'umap', group.by = 'Day')
+p4 <- DimPlot(merged_seurat, reduction = 'umap', group.by = 'orig.ident')
+
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+
+
+### Integration 
+```{r Integration , echo=FALSE, message=TRUE, warning=FALSE, paged.print=TRUE, fig.width=15, fig.height=5}
+qs_path <- here("output", "seurat_objects", "merged_seurat_filt_seurat.qs")
+merged_seurat <- qs::qread(qs_path) 
+
+merged_seurat <- JoinLayers(object = merged_seurat)
+merged_seurat[["RNA"]] <- split(merged_seurat[["RNA"]], f = merged_seurat$orig.ident)
+
+#Harmony renders a different umap each time 
+# i thougth settign the seed would solve this but coming bck to this isuue later has suggested it does not 
+# Issue has been raised on github before and could be do to a differnt compautional node being used for each session. 
+
+set.seed(1234)
+#perform integration with Harmony
+obj <- IntegrateLayers(object = merged_seurat,
+                       method = HarmonyIntegration,
+                       orig.reduction = "pca",
+                       new.reduction = 'integrated.harm',
+                       verbose = FALSE,
+)
+
+#check_elbow plot
+ElbowPlot(obj,ndims = 50)
+```
+
+
+```{r Integration_plots , echo=FALSE, message=TRUE, warning=FALSE, paged.print=TRUE, fig.width=15, fig.height=5}
+obj <- RunUMAP(obj, reduction="integrated.harm", dims=1:15, reduction.name = "umap.harm")
+
+
+DimPlot(obj, reduction = "umap.harm", group.by = c("Day", "orig.ident", "seurat_clusters"), label = T)  
+FeaturePlot(obj, reduction = 'umap.harm', features = c('nCount_RNA','nFeature_RNA'))
+
+
+##save merged object
+#qs_save(
+#    obj,
+#    file   = here("output", "seurat_objects", "harm_seurat_filt_15PCS_seurat.qs"))
+```
+
+
+
+### add this to a new script but lets check the trajectory and makers
+```{r traj , echo=FALSE}
+source(here("code","trajectory_analysis.R"))
+
+ perform_trajectory_analysis(seurat_obj = obj, "RNA", prefix = "FLAMESv2_Kolf2.1_NDR_0.75",
+                            cluster_name="seurat_clusters",  root_cells = NULL, cores = 8, order_features_by_pseudotime = TRUE, number_of_features = 20000000)
+ 
+```

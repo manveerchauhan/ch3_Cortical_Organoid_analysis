@@ -1,0 +1,237 @@
+---
+site: workflowr::wflow_site
+title: "Setup - Cortical Organoid Project"
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: textmate
+---
+
+# Setup for Cortical Organoid Differentiation Analysis
+
+This script adapts the FLAMES analysis pipeline for the current cortical organoid differentiation project with timepoints at 1, 3, and 6 months.
+
+```{r setup, echo=FALSE}
+library(rtracklayer)
+library(Seurat)
+library(DropletUtils)
+library(gridExtra)
+library(data.table)
+library(BiocParallel)
+library(celda)
+library(SingleCellExperiment)
+library(DoubletFinder)
+library(stringr)
+library(cowplot)
+library(grid)
+library(patchwork)
+library(tidyverse)
+library(ORFik)
+library(GenomicFeatures)
+library(Gviz)
+library(BSgenome.Hsapiens.UCSC.hg38)
+```
+
+```{r, echo=FALSE}
+# Required functions for setup files
+# Note: Create utils.R file with necessary helper functions
+# source("code/utils.R")
+```
+
+## Project Configuration
+
+```{r project_config}
+# Current project paths - Cortical Organoid Differentiation
+FLAMES_OUTPUT_DIR <- "/data/gpfs/projects/punim2251/Neurodevelopmental_Models/Cortical_Org_Diff/flame_outs_standard_ref"
+PROJECT_DIR <- "/data/gpfs/projects/punim2251/Neurodevelopmental_Models_analysis/previous_project_analysis_scripts"
+
+# FLAMES reference files used in the pipeline
+FLAMES_gtf_file <- file.path(FLAMES_OUTPUT_DIR, "isoform_annotated.gtf")
+reference_gtf_file <- "/data/gpfs/projects/punim2251/Organoid_NDR_FLAMES_ref/modified_gencode_v47_primary_annotation.gtf"
+
+# Output directories
+output_ref_dir <- file.path(PROJECT_DIR, "output/ref_file")
+output_data_dir <- file.path(PROJECT_DIR, "data/gene_counts")
+
+# Create output directories if they don't exist
+dir.create(output_ref_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(output_data_dir, recursive = TRUE, showWarnings = FALSE)
+```
+
+## Sample Information
+
+```{r sample_info}
+# Sample metadata for cortical organoid differentiation
+sample_metadata <- data.frame(
+  sample_id = c("org_1A", "org_1B", "org_3A", "org_3B", "org_3C", "org_6A", "org_6B", "org_6C"),
+  timepoint = c("1M_Org", "1M_Org", "3M_Org", "3M_Org", "3M_Org", "6M_Org", "6M_Org", "6M_Org"),
+  timepoint_days = c(30, 30, 90, 90, 90, 180, 180, 180),
+  replicate = c("A", "B", "A", "B", "C", "A", "B", "C"),
+  expected_cells = c(900, 1600, 1000, 1300, 2000, 600, 1200, 1100),
+  stringsAsFactors = FALSE
+)
+
+print(sample_metadata)
+```
+
+## Create Isoform-Gene Dictionary
+
+```{r create_isoform_dict, echo=TRUE, eval=FALSE}
+# Create isoform to gene symbol dictionary
+# This function needs to be implemented in utils.R
+output_file <- file.path(output_ref_dir, "isoform_gene_dict.csv")
+
+# Call the helper function to create a dictionary containing corresponding gene information for each isoform
+# This may take a few minutes
+isoform_gene_dict <- make_isoform_gene_symbol_dict(
+  FLAMES_gtf     = FLAMES_gtf_file,
+  reference_gtf  = reference_gtf_file,
+  output_file    = output_file
+)
+```
+
+## Process FLAMES Count Matrices
+
+```{r process_count_matrices, echo=TRUE, eval=FALSE}
+# Convert gene count matrices from FLAMES output to gene symbol format
+# This adapts the original pipeline to work with the current FLAMES structure
+
+# List all gene count CSV files from FLAMES output
+input_files <- file.path(FLAMES_OUTPUT_DIR, paste0(sample_metadata$sample_id, "_gene_count.csv"))
+names(input_files) <- sample_metadata$sample_id
+
+# Process each file in the directory
+total_files <- length(input_files)
+result_list <- list()
+
+for (i in seq_along(input_files)) {
+  file_path <- input_files[i]
+  sample_name <- names(input_files)[i]
+
+  # Check if file exists
+  if (!file.exists(file_path)) {
+    warning(sprintf("File not found: %s", file_path))
+    next
+  }
+
+  # Construct the output file name
+  output_file <- file.path(output_data_dir, paste0(sample_name, "_gene_count_symbol.csv"))
+
+  # Show progress to the user
+  message(sprintf("Processing file %d of %d: %s", i, total_files, sample_name))
+
+  # Call the function with return_df = TRUE to store the result
+  # This function needs to be implemented to work with FLAMES gene count format
+  result_list[[sample_name]] <- convert_ENSGID_to_geneSymbol(
+    gene_count_matrix_path = file_path,
+    output_file = output_file,
+    return_df = TRUE
+  )
+}
+```
+
+## Load FLAMES Count Matrices into R
+
+```{r load_count_matrices}
+# Function to load FLAMES count matrices in 10X format
+load_flames_counts <- function(flames_dir, sample_id) {
+  # FLAMES outputs are in 10X format with:
+  # - .count.mtx: sparse matrix
+  # - .barcodes.txt: cell barcodes
+  # - .features.txt: transcript IDs
+
+  mtx_file <- file.path(flames_dir, paste0(sample_id, ".count.mtx"))
+  barcodes_file <- file.path(flames_dir, paste0(sample_id, ".barcodes.txt"))
+  features_file <- file.path(flames_dir, paste0(sample_id, ".features.txt"))
+
+  # Read the count matrix
+  counts <- readMM(mtx_file)
+
+  # Read barcodes and features
+  barcodes <- read.table(barcodes_file, header = FALSE, stringsAsFactors = FALSE)$V1
+  features <- read.table(features_file, header = FALSE, stringsAsFactors = FALSE)$V1
+
+  # Set row and column names
+  rownames(counts) <- features
+  colnames(counts) <- barcodes
+
+  return(counts)
+}
+
+# Example usage for loading one sample
+# counts_1A <- load_flames_counts(FLAMES_OUTPUT_DIR, "org_1A")
+```
+
+## Quality Control Information
+
+```{r qc_info, echo=TRUE, eval=FALSE}
+# Read summary statistics for all samples
+summary_files <- file.path(FLAMES_OUTPUT_DIR, paste0(sample_metadata$sample_id, "_summary.txt"))
+names(summary_files) <- sample_metadata$sample_id
+
+qc_stats <- list()
+for (sample in sample_metadata$sample_id) {
+  summary_file <- summary_files[sample]
+  if (file.exists(summary_file)) {
+    # Read summary file and extract key metrics
+    summary_text <- readLines(summary_file)
+
+    # Extract key metrics (adapt based on actual summary file format)
+    cells_line <- grep("Identified # of cells:", summary_text, value = TRUE)
+    total_reads_line <- grep("Total reads:", summary_text, value = TRUE)
+    reads_in_cells_line <- grep("Total reads in cells:", summary_text, value = TRUE)
+
+    qc_stats[[sample]] <- list(
+      file = summary_file,
+      cells = ifelse(length(cells_line) > 0,
+                    as.numeric(gsub(".*: ", "", cells_line)), NA),
+      total_reads = ifelse(length(total_reads_line) > 0,
+                          as.numeric(gsub("[^0-9]", "", total_reads_line)), NA),
+      reads_in_cells_pct = ifelse(length(reads_in_cells_line) > 0,
+                                 gsub(".*\\((.*)%\\).*", "\\1", reads_in_cells_line), NA)
+    )
+  }
+}
+
+# Convert to data frame for easy viewing
+qc_summary <- do.call(rbind, lapply(names(qc_stats), function(x) {
+  data.frame(
+    sample = x,
+    cells = qc_stats[[x]]$cells,
+    total_reads = qc_stats[[x]]$total_reads,
+    reads_in_cells_pct = qc_stats[[x]]$reads_in_cells_pct,
+    stringsAsFactors = FALSE
+  )
+}))
+
+print(qc_summary)
+```
+
+## Notes
+
+### Data Structure
+- FLAMES outputs are in standard 10X format (MTX + barcodes + features)
+- Features file contains transcript IDs (ENST format)
+- Count matrices are at transcript/isoform level, not gene level
+- Gene-level counts are available in separate `*_gene_count.csv` files
+
+### File Locations
+- **FLAMES GTF**: `r FLAMES_gtf_file`
+- **Reference GTF**: `r reference_gtf_file`
+- **Count matrices**: `r FLAMES_OUTPUT_DIR`/*.count.mtx
+- **Gene counts**: `r FLAMES_OUTPUT_DIR`/*_gene_count.csv
+
+### Sample Overview
+- **Total samples**: 8 (org_1A, org_1B, org_3A, org_3B, org_3C, org_6A, org_6B, org_6C)
+- **Timepoints**: 1 month (2 reps), 3 months (3 reps), 6 months (3 reps)
+- **Expected cells per sample**: 600-2000 cells
+
+### Next Steps
+1. Create necessary utility functions in `code/utils.R`
+2. Process count matrices and create gene symbol versions
+3. Create Seurat objects for each timepoint
+4. Proceed with integration and downstream analysis
+
+When filtering with the FLAMES GTF, features that don't pass Bambu filtering will be excluded. This typically removes ~5,000 features but represents <1% of total counts. If this is a concern, use the unfiltered FLAMES GTF (`isoform_annotated_unfiltered.gtf`).

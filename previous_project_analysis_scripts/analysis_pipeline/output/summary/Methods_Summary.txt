@@ -1,0 +1,35 @@
+
+METHODS SUMMARY - Cortical_Organoid_Differentiation
+Generated: 2025-10-05
+Pipeline Version: 1.0.0
+
+=== QUALITY CONTROL PARAMETERS ===
+- Minimum features per cell: 200
+- Maximum features per cell: 8000
+- Minimum counts per cell: 500
+- Maximum counts per cell: 50000
+- Maximum mitochondrial percentage: 20%
+- Minimum cells per feature: 3
+
+=== INTEGRATION PARAMETERS ===
+- Dimensions used: 1 - 30
+- Clustering resolutions tested: 0.1, 0.2, 0.3, 0.5, 0.8, 1
+- K-neighbors: 20
+
+=== DIFFERENTIAL EXPRESSION PARAMETERS ===
+- Minimum percent expression: 0.1
+- Log fold-change threshold: 0.25
+- Statistical test: wilcox
+- P-value cutoff: 0.05
+
+=== DTU ANALYSIS PARAMETERS ===
+- dIF cutoff: 0.25
+- Alpha level: 0.01
+- Minimum gene expression: 30
+- Minimum isoform expression: 20
+
+=== SOFTWARE VERSIONS ===
+R Version: R version 4.3.2 (2023-10-31)
+Analysis Date: 2025-10-05
+FLAMES Output Directory: /data/gpfs/projects/punim2251/Neurodevelopmental_Models/Cortical_Org_Diff/flame_outs_standard_ref
+

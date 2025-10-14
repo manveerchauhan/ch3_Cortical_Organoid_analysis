@@ -1,0 +1,1839 @@
+---
+title: "Day55_prom_data"
+author: "Sefi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(rtracklayer)
+library(Seurat)
+library(DropletUtils)
+library(gridExtra)
+library(data.table)
+library(BiocParallel)
+library(celda)
+library(SingleCellExperiment)
+library(DoubletFinder)
+library(stringr)
+library(cowplot)
+library(grid)
+library(patchwork)
+library(tidyverse)
+library(ORFik)
+library(GenomicFeatures)
+library(Gviz)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(biomaRt)
+```
+
+## R Markdown
+
+Read in and QC Day 55 prom data 
+NDR 0.75 
+Same analysis workflow as multisample 
+
+```{r cars}
+# Required functions for setup files
+source("code/utils.R")
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+
+```{r echo=TRUE, eval=FALSE}
+# The FLAMES ref can be found in your selected output folder after running the Flames pipeline. 
+FLAMES_gtf_file <- "/data/scratch/users/yairp/FLAMESv2_Day55_prom_grid_2025/outs/isoform_annotated.gtf" #ensure file is unzipped
+reference_gtf_file <- "/data/scratch/users/yairp/FLAMES_Day55/resources/gencode.v47.annotation.gtf" # #same ref for Day55 and Multisample
+output_file <- "output/ref_file/isoform_gene_dict_day55_prom.csv"
+
+# Call the helper function defined in code block above to create a dictionary containing corresponding gene information for each isoform
+# This may take a few minutes 
+isoform_gene_dict <- make_isoform_gene_symbol_dict(
+  FLAMES_gtf     = FLAMES_gtf_file,
+  reference_gtf  = reference_gtf_file,
+  output_file    = output_file
+)
+
+```
+##
+Notes:
+28077 Bambu Genes in the raw GTF file. 
+Will remove all of these in downstream analysis  
+
+```{r}
+
+# convert Gene_id to gene symbol for all counts
+#run a loop to run this function on all count files.
+# Directory with input files
+input_dir <- "data/day55_prom/gene_counts/"
+output_dir <- "data/day55_prom/gene_counts/"
+
+# List all CSV files in the input directory
+input_files <- list.files(input_dir, pattern = "\\count.csv$", full.names = TRUE)
+
+# Initialize an empty list to store data frames
+result_list <- list()
+
+# Process each file in the directory
+total_files <- length(input_files)  # Total number of files
+
+for (i in seq_along(input_files)) {
+  file_path <- input_files[i]
+  
+  # Extract file name without extension
+  file_name <- tools::file_path_sans_ext(basename(file_path))
+  
+  # Construct the output file name
+  output_file <- file.path(output_dir, paste0(file_name, "_gene_symbol.csv"))
+  
+  # Show progress to the user
+  message(sprintf("Processing file %d of %d: %s", i, total_files, file_name))
+  
+  # Call the function with return_df = TRUE to store the result
+  result_list[[file_name]] <- convert_ENSGID_to_geneSymbol(
+    gene_count_matrix_path = file_path,
+    output_file = output_file,
+    return_df = TRUE
+  )
+}
+
+
+
+
+```
+
+```{r, message=TRUE, warning=TRUE, include=FALSE, paged.print=TRUE}
+library(here)
+library(qs)
+source(here("code","gene_QC_function.R"))
+```
+
+```{r read_gene_counts, message=FALSE, warning=FALSE, include=FALSE, echo=TRUE}
+# 1) List all files ending in "_gene_symbol.csv" under data/gene_counts/
+csv_files <- list.files(
+  path       = here("data/day55_prom","gene_counts"),
+  pattern    = "_gene_symbol\\.csv$",
+  full.names = TRUE
+)
+
+# 2) Extract sample names by stripping off the "_gene_symbol.csv" suffix
+#    e.g. "data/gene_counts/C1_STC_gene_symbol.csv" → "C1_STC"
+sample_names <- sub("_gene_symbol\\.csv$", "", basename(csv_files))
+
+# 3) Read each CSV into a data.frame 
+#    Here we assume the first column is row names (gene IDs) and the rest are cell counts.
+result_list <- setNames(
+  lapply(csv_files, function(path) {
+    # If your CSV has gene IDs in the first column and no header for row names:
+    df <- read.csv(path, row.names = 1, check.names = FALSE)
+    # If you prefer a raw matrix (instead of data.frame):
+    # df <- as.matrix(read.csv(path, row.names = 1, check.names = FALSE))
+    return(df)
+  }),
+  sample_names
+)
+```
+
+### Day55_prom
+```{r day55_prom, echo = TRUE, results='hide', message   = FALSE, warning   = FALSE,  fig.show  = 'hide', cache=TRUE}
+
+day55_prom <- perform_qc_filtering(
+     count.matrix = result_list[["day55_prom_gene_count"]],
+     min.features  = 4000,
+     max.features  = 1000000,
+     min.counts    = 1000,
+     max.counts    = 150000,
+     npc           = 12,
+     cluster_res   = 0.4,
+     project       = "day55_prom",
+     MT            = 10,
+     doublet_rate  = 0.039
+     )
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=5}
+print(day55_prom$pre_qc_panel)
+
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=15, fig.height=15}
+print(day55_prom$post_qc_panel)
+```
+
+```{r, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=5, fig.height=5}
+print(day55_prom$doublet_table)
+print(day55_prom$summary_metrics_df)
+```
+
+#### save all files to output/gene_QC
+```{r save_all_QC_outputs, echo = TRUE, results='hide', message   = FALSE, warning   = FALSE,  fig.show  = 'hide'}
+## save_all_QC_outputs chunk
+sample_names <- c(
+  "day55_prom"
+)
+
+
+qc_results  <- mget(sample_names, envir = .GlobalEnv)
+
+
+
+for (nm in sample_names) {
+  res <- qc_results[[nm]]
+
+  # 1) Save the full QC object
+  qsave(
+    res,
+    file   = here("output/day55_prom", "gene_QC",    paste0(nm, "_qc_results.qs")),
+    preset = "fast"
+  )
+
+  # 2) Extract the embedded Seurat object (4th element)
+  seurat_obj <- res[[4]]
+  
+  # 2b) Also save it under the new name "<sample>_singlet_filt_seurat.qs"
+  qsave(
+    seurat_obj,
+    file   = here("output/day55_prom", "seurat_objects", paste0(nm, "_singlet_filt_seurat.qs")),
+    preset = "fast"
+  )
+
+  # 3) Write out the QC panel plots
+  pdf(
+    file   = here("output/day55_prom", "gene_QC", paste0(nm, "_QC_panels.pdf")),
+    width  = 14,
+    height = 14
+  )
+  print(res$pre_qc_panel)
+  print(res$post_qc_panel)
+  dev.off()
+
+  # 4) Export the summary & doublet tables
+  write.csv(
+    res$summary_metrics_df,
+    file      = here("output/day55_prom", "gene_QC", paste0(nm, "_summary_metrics.csv")),
+    row.names = FALSE
+  )
+  write.csv(
+    res$doublet_table,
+    file      = here("output/day55_prom", "gene_QC", paste0(nm, "_doublet_table.csv")),
+    row.names = FALSE
+  )
+}
+```
+
+
+
+## Cell types 
+
+```{r}
+set.seed(1234)
+
+qs_path <- here("output/day55_prom/seurat_objects/day55_prom_singlet_filt_seurat.qs")
+obj <- qs::qread(qs_path) 
+
+
+DimPlot(obj, reduction = "umap", label = T)
+
+# Cluster
+obj <- FindClusters(
+    obj, 
+    resolution = seq(0.1, 1, by = 0.1)
+)
+
+library("clustree")
+# Visualise cluster stability
+clustree(obj)
+
+
+```
+
+
+```{r}
+# choose 0.7
+Idents(obj) <- "RNA_snn_res.0.7"
+
+DimPlot(obj, reduction = "umap", label = T)
+
+
+```
+
+### annotate cells
+
+```{r}
+
+FeaturePlot(obj, features = c("HOPX", "GAD1", "GAD2", "VIM", "GRIA1", "TBR1", "EOMES", "GFAP", "FOXP1", "DLX2", "ELAVL4"))
+
+```
+
+
+
+
+
+
+
+
+```{r,  echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=10, fig.height=5}
+library(clustifyr)
+ref_cortex_org <-readRDS("/data/scratch/projects/punim1441/Project_cortex_organoid_LRsc/analysis/seurat_objects_with_iso_assya/merged_all_iso.rds")
+
+
+DefaultAssay(ref_cortex_org) <- "RNA" 
+pseudo_df <- as.data.frame(
+    AggregateExpression(
+      ref_cortex_org,
+      return.seurat = FALSE,
+      group.by      = "cluster_annotations",
+      assays        = "RNA",
+      slot = "counts"
+    )$RNA, 
+    stringsAsFactors = FALSE
+)
+
+res <- clustify(
+  input       = obj,   # or directly use counts_matrix+meta
+  ref_mat     = pseudo_df,     # genes × cells from Lake et al.
+  cluster_col = "seurat_clusters",
+  obj_out     = TRUE
+)
+
+DimPlot(res, group.by="type", label=TRUE, reduction = "umap")
+
+```
+
+```{r,  echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=10, fig.height=5}
+load("/data/gpfs/projects/punim1441/FLAMES_202311/resources/ref_cortex_dev.rda")
+
+res <- clustify(
+input = obj,      # a Seurat object
+ref_mat = ref_cortex_dev,   # matrix of RNA-seq expression data for each cell type
+cluster_col = "seurat_clusters", # name of column in meta.data containing cell clusters
+obj_out = TRUE  # output Seurat object with cell type inserted as "type" column
+)
+
+DimPlot(res, group.by = 'type', label = T, reduction = "umap")
+```
+
+
+### My list 
+
+```{r,  echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE, fig.width=10, fig.height=5}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+
+# 1) Define all marker lists
+marker_lists <- list(
+
+  # Neuroepithelial / Early Progenitors
+  Neuroepithelial    = c("SOX2","PAX6","NES","HES1","LIN28A","ZIC1","FOXG1"),
+  aRG_vRG            = c("HES1","VIM","PAX6","SOX2","FABP7"),
+  oRG                = c("HOPX","FAM107A","PTPRZ1","CRYAB","LGALS3"),
+  RG_Cycling         = c("MKI67","PCNA","TOP2A","CDK1","CCNB1"),
+
+  # Intermediate (Basal) Progenitors
+  IPc                = c("EOMES","NEUROD1","TBR1","NEUROG2","HES6"),
+
+  # Early Post-mitotic Neuroblasts
+  Neuroblasts        = c("DCX","PSA-NCAM","STMN2","STMN4","TUBB3","NEUROD6"),
+
+  # Interneuron lineages
+  MGE_IN             = c("NKX2-1","LHX6","SOX6","ZEB2","SATB1","ERBB4"),
+  CGE_IN             = c("SP8","PROX1","NR2F2","GAD2", "CALB2", "RELN"),
+
+  # Interneuron maturation states
+  IN_Immature        = c("DCX","NCAM1","STMN2","NEUROD6", "GAD1", "GAD2"),
+  SST_Neurons        = c("SST","GAD1","GAD2","NPY","CRHBP"),
+  PVALB_Neurons      = c("PVALB","KCNC1","SLC32A1","GAD1","GAD2"),
+  VIP_Neurons        = c("VIP","CALB2","CPLX3","GAD1","GAD2"),
+  LAMP5_NOS1         = c("LAMP5","RELN","NDNF","NOS1","GAD1","GAD2"),
+
+  # Excitatory neurons general + layer-specific
+  Excitatory_General = c("SLC17A7","CAMK2A","GRIA1","NEUROD6","TBR1", "SLC17A7", "SLC17A6"),
+  Ex_L2_3            = c("CUX2","SATB2","UNC5D","MDGA1","SYT2"),
+  Ex_L4              = c("RORB","NECTIN3","KCND2","RIT2","PCSK1N"),
+  Ex_L5              = c("FEZF2","BCL11B","TCF21","ETV1","KCNS1"),
+  Ex_L6              = c("FOXP2","TLE4","TLE1","NUAK1","CRIP2"),
+
+  # Glial lineages
+  Astro_Progenitors  = c("ALDH1L1","SLC1A3","S100B","GJA1","FGFR3"),
+  OPC_Progenitors    = c("PDGFRA","CSPG4","VCAN","OLIG1","NKX2-2"),
+  Oligo_Mature       = c("MBP","PLP1","MOG","CNP","MAG"),
+
+  # Other non-neuronal options
+  Microglia          = c("TMEM119","P2RY12","CX3CR1","C1QA","AIF1"),
+  Endothelial        = c("CLDN5","VWF","FLT1","PECAM1","CDH5"),
+  
+  # Cell cycle scores
+  CellCycle_S        = cc.genes$s.genes,
+  CellCycle_G2M      = cc.genes$g2m.genes
+)
+
+
+# 2) Add module scores
+seurat_obj <- AddModuleScore(
+  object   = obj,
+  features = marker_lists,
+  name     = names(marker_lists)
+)
+
+# 1) Reconstruct the exact score column names
+score_cols <- paste0(names(marker_lists), seq_along(marker_lists))
+score_cols <- intersect(score_cols, colnames(seurat_obj@meta.data))
+
+# Loop over each module score and plot
+for (mod in score_cols) {
+  p <- VlnPlot(
+    object   = seurat_obj,
+    features = mod,
+  ) +
+    # add horizontal zero line
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+    # add median bar
+    stat_summary(
+      fun = median,
+      geom = "crossbar",
+      width = 0.2,
+      color = "black",
+      size = 0.3
+    ) +
+    labs(
+      title = paste0("Module score: ", mod),
+      x     = "Cluster",
+      y     = "Score"
+    ) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      plot.title  = element_text(hjust = 0.5)
+    )
+  print(p)
+}
+```
+
+```{r}
+
+DimPlot(obj, label = T)
+
+```
+
+
+```{r}
+
+marker_lists <- list(
+  GABAergic_neurons          = c("SLC6A1","GABBR1","GABBR2","GAD2","GAD1","SLC32A1"),
+  Glutamatergic_neurons      = c("SLC17A7","SLC17A6","GRIN1","GRIN2B","GLS","GLUL","GRIN2A"),
+  Immature_neurons           = c("DCX","NEUROD1","TBR1","STMN1","NCAM1","TUBB3"),
+  Immune_system_cells        = c("MS4A1","CCR6","CXCR3","CD4","IL2RA","ISG20","TNFRSF8","Trac","Ltb","Cd52"),
+  Mature_neurons             = c("RBFOX3","MAP2","SYP","DLG4","TUBB3","MAPT","INA","GAP43","NRP1"),
+  Microglial_cells           = c("P2RY12","ITGAM","CD40","PTPRC","CD68","AIF1","CX3CR1","TMEM119",
+                                 "ADGRE1","C1QA","NOS2","TNF","ISYNA1","CCL4","ADORA3","ADRB2",
+                                 "BHLHE41","BIN1","KLF2","NAV3","RHOB","SALL1","SIGLEC8","SLC1A3",
+                                 "SPRY1","TAL1"),
+  Myelinating_Schwann_cells  = c("SOX10","EGR2","MBP","MPZ"),
+  Neural_Progenitor_cells    = c("CSPG4","RNF5","EOMES","SOX2","SOX1","NES","PAX3","PAX6",
+                                 "OTX2","CNTNAP1","ASCL1","SMARCA4","MSI1","MSI2"),
+  Neural_stem_cells          = c("SOX2","PROM1","NES","SOX9"),
+  Neuroblasts                = c("NEUROD1","DCX","DLX2","PROX1","EOMES","TUBB3"),
+  Neuroepithelial_cells      = c("NES","SOX2","NOTCH1","HES1","HES3","CDH1","OCLN","SOX10")
+)
+
+
+# 2) Add module scores
+seurat_obj <- AddModuleScore(
+  object   = obj,
+  features = marker_lists,
+  name     = names(marker_lists)
+)
+
+# 1) Reconstruct the exact score column names
+score_cols <- paste0(names(marker_lists), seq_along(marker_lists))
+score_cols <- intersect(score_cols, colnames(seurat_obj@meta.data))
+
+# Loop over each module score and plot
+for (mod in score_cols) {
+  p <- VlnPlot(
+    object   = seurat_obj,
+    features = mod,
+  ) +
+    # add horizontal zero line
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+    # add median bar
+    stat_summary(
+      fun = median,
+      geom = "crossbar",
+      width = 0.2,
+      color = "black",
+      size = 0.3
+    ) +
+    labs(
+      title = paste0("Module score: ", mod),
+      x     = "Cluster",
+      y     = "Score"
+    ) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      plot.title  = element_text(hjust = 0.5)
+    )
+  print(p)
+}
+```
+
+
+```{r}
+prom_day55_all_markers <- FindAllMarkers(obj,
+                                         only.pos = TRUE,
+                                         min.pct = 0.25,
+                                         logfc.threshold = 0.25)
+
+top10 <- prom_day55_all_markers %>%
+  group_by(cluster) %>%
+  top_n(n = 10, wt = avg_log2FC)
+
+# Step 3: Create heatmap
+DoHeatmap(
+  object = obj,
+  features = top10$gene,
+  group.by = "RNA_snn_res.0.7",
+  assay = "RNA",                 # match to your marker assay
+  size = 3
+) + NoLegend()
+
+write.csv(prom_day55_all_markers, "../output/day55_prom/prom_day55_all_markers.csv")
+
+```
+
+
+## try sctype 
+```{r}
+# load libraries from sctype
+invisible(lapply(c("ggraph","igraph","tidyverse", "data.tree"), library, character.only = T))
+invisible(lapply(c("dplyr","Seurat","HGNChelper"), library, character.only = T))
+
+# load gene set preparation function
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R")
+# load cell type annotation function
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R")
+
+####
+# define functions
+perform_sctype_analysis <- function(seurat_obj, db_, tissue, gs_removal_list = c(), 
+                                    metadat_col_prefix = "db_prefix", figure_prefix ="fig_name", cluster_res = "RNA_snn_res.0.9", output_file = "", reduction = "umap") {
+
+    # Prepare gene sets
+  gs_list <- gene_sets_prepare(db_, tissue)
+  
+  # Remove specified gene sets
+  for (gs in gs_removal_list) {
+    gs_list[["gs_positive"]][[gs]] <- NULL
+  }
+  
+  # Calculate sctype scores
+  es.max <- sctype_score(scRNAseqData = seurat_obj@assays$RNA$scale.data, scaled = TRUE, 
+                         gs = gs_list$gs_positive, gs2 = gs_list$gs_negative)
+  
+  # Set identities in Seurat object
+  Idents(seurat_obj) <- cluster_res
+  
+  # Merge by cluster
+  cL_results <- do.call("rbind", lapply(unique(seurat_obj@meta.data[[cluster_res]]), function(cl) {
+    es.max.cl <- sort(rowSums(es.max[, rownames(seurat_obj@meta.data[seurat_obj@meta.data[[cluster_res]] == cl, ])]), decreasing = TRUE)
+    head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(seurat_obj@meta.data[[cluster_res]] == cl)), 10)
+  }))
+  
+  sctype_scores <- cL_results %>% group_by(cluster) %>% top_n(n = 1, wt = scores)
+  
+  # Set low-confident clusters to "Unknown"
+  sctype_scores$scores <- as.numeric(sctype_scores$scores)
+  sctype_scores$type[sctype_scores$scores < sctype_scores$ncells / 4] <- "Unknown"
+  print(sctype_scores[, 1:3])
+  
+  # Overlay the labels
+  seurat_obj@meta.data[[metadat_col_prefix]] <- ""
+  for (j in unique(sctype_scores$cluster)) {
+    cl_type <- sctype_scores[sctype_scores$cluster == j,]
+    seurat_obj@meta.data[[metadat_col_prefix]][seurat_obj@meta.data[[cluster_res]] == j] <- as.character(cl_type$type[1])
+  }
+  
+  # Plotting
+  pclass <- DimPlot(seurat_obj, reduction = reduction, label = TRUE, repel = TRUE, group.by = metadat_col_prefix)
+  print(pclass)
+  
+  # Save the plot to a PDF
+  pdf(file = paste0(figure_prefix, "_", metadat_col_prefix, "_sctype_genes.pdf"), width = 8, height = 8)
+  print(pclass + ggtitle(figure_prefix))
+  dev.off()
+  
+  # Save the updated Seurat object to an RDS file
+  #if (output_file != "") {
+  #  saveRDS(seurat_obj, file = paste0(output_file, ".rds"))
+  #}
+  
+  # Return the updated Seurat object
+  return(seurat_obj)
+}
+
+
+# Define variables
+db_ = "https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/ScTypeDB_full.xlsx"; # this is a defualt databse from sctype 
+tissue <- "Brain"
+
+obj <- perform_sctype_analysis(obj, db_, tissue, gs_removal_list, 
+                        metadat_col_prefix ="sctype_db", figure_prefix = "day_55_prom",
+                        output_file = "day_55_prom", cluster_res = "RNA_snn_res.0.7", reduction = "umap")
+
+```
+
+
+```{r, paged.print=TRUE, fig.width=25, fig.height=5}
+# 1) Define your three annotation vectors
+qs2::qs_read(file = "../output/day55_prom/seurat_objects/day55_prom_with_iso.qs") -> obj_day55
+obj_day55 -> obj
+
+broad_type <- c(
+  `0`  = "Neurons",
+  `1`  = "Non-neuronal",
+  `2`  = "Neurons",   
+  `3`  = "Neurons",    
+  `4`  = "Non-neuronal",   
+  `5`  = "Non-neuronal",
+  `6` =  "Neurons"
+)
+
+intermediate_type <- c(
+  `0`  = "Deep-layer projection neurons", 
+  `1`  = "Radial glial cells",
+  `2`  = "Deep-layer projection neurons",
+  `3`  = "Gabaergic Neurons",
+  `4`  = "Radial glial cells",
+  `5`  = "Radial glial cells",
+  `6` = "Deep-layer projection neurons"
+)
+
+
+# 2) Map them onto your Seurat object metadata
+#    assume your active identities are the original numeric cluster IDs
+obj@meta.data$BroadType        <- broad_type[ as.character(Idents(obj)) ]
+obj@meta.data$IntermediateType <- intermediate_type[ as.character(Idents(obj)) ]
+#obj@meta.data$DetailedType     <- detailed_type[ as.character(Idents(obj)) ]
+
+DimPlot(obj, group.by = c("BroadType"), reduction = "umap", label = F) | DimPlot(obj, group.by = c("IntermediateType"), reduction = "umap", label = F)
+```
+
+
+notes: Go with sctype and broad for now. My thoughts are to wait for maria to give detailed look. 
+can upadte later if required
+
+
+## Add iso counts 
+```{r}
+library(qs2)
+library(data.table)
+source(here("code","process_oarfish_files_to_counts_matrix.R"))
+
+```
+
+```{r, echo=TRUE, eval=FALSE}
+# Example usage:
+# List of sample names
+sample_names <- c("day55_prom_oarfish_9"
+                  )
+
+# Loop through each sample and process the count files
+for (sample in sample_names) {
+  # Use tryCatch to handle errors
+  tryCatch({
+    # Call the function to process the sample
+    process_oarfish_files_to_counts_matrix(
+      sample_name = sample,
+      resource_table_path = here("output", "ref_file", "isoform_gene_dict_day55_prom.csv"),
+      output_dir = here("data/day55_prom","isoform_counts_coverage_model"),
+      input_dir = "/data/scratch/users/yairp/FLAMESv2_Day55_prom_grid_2025/outs/coverage_model",
+      filter_bambu_Genes = TRUE
+    )
+  }, error = function(e) {
+    # Print the error message and exit the loop
+    cat("Error processing sample:", sample, "\nError message:", e$message, "\nExiting loop.\n")
+    stop(e)
+  })
+}
+```
+
+```{r pressure, echo=TRUE}
+sample_names <- c("day55_prom_oarfish_9_counts"
+                  )
+
+############ read in count matrix and add isoform assay to Seurat object  #########
+
+#Make Seurat objects not filtered
+# Function to read a CSV file and create a Seurat object
+create_seurat_object <- function(sample_name, input_dir, project_name) {
+  # Construct file path
+  file_path <- here(input_dir, paste0("gene_symbol_oarfish_", sample_name, ".csv"))
+  
+  # Read the CSV file
+  counts <- fread(file_path)
+  counts <- as.data.frame(counts) 
+  rownames(counts) <- counts[[1]]            # Set row names from the first column
+  counts[[1]] <- NULL     
+  
+  # Create the Seurat object
+  seurat_obj <- CreateSeuratObject(counts = counts, project = project_name, min.cells = 5, min.features = 500)
+  
+  return(seurat_obj)
+}
+
+# Directory where the CSV files are stored
+input_directory <- here("data/day55_prom", "isoform_counts_coverage_model")
+
+# Create an empty list to store Seurat objects
+iso_seurat_objects <- list()
+
+total_samples <- length(sample_names)
+for (i in seq_along(sample_names)) {
+  sample <- sample_names[i]
+  
+  message(sprintf("Processing sample %d of %d: %s", i, total_samples, sample))
+  
+  iso_seurat_objects[[sample]] <- create_seurat_object(
+    sample_name = sample,
+    input_dir = input_directory,
+    project_name = sample
+  )
+}
+
+iso_seurat_objects[[1]] -> iso_seurat
+
+## filter the data to iso and gene cells match
+seurat_isoform_filtered <- subset(iso_seurat, cells =obj@graphs[["RNA_nn"]]@Dimnames[[1]])
+
+VlnPlot(seurat_isoform_filtered, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# perform standard workflow steps
+seurat_isoform_filtered <- NormalizeData(object = seurat_isoform_filtered) 
+seurat_isoform_filtered <- FindVariableFeatures(object = seurat_isoform_filtered)
+seurat_isoform_filtered <- ScaleData(object = seurat_isoform_filtered)
+seurat_isoform_filtered <- RunPCA(object = seurat_isoform_filtered)
+ElbowPlot(seurat_isoform_filtered)
+seurat_isoform_filtered <- FindNeighbors(object = seurat_isoform_filtered, dims = 1:10)
+seurat_isoform_filtered <- FindClusters(object = seurat_isoform_filtered, resolution = 0.6)
+seurat_isoform_filtered <- RunUMAP(object = seurat_isoform_filtered, dims = 1:10)
+
+### can plot just the iso objects if you want - not required here 
+
+```
+### add isoform assay to obj
+
+```{r}
+counts_table <- seurat_isoform_filtered[["RNA"]]$counts
+
+obj[["iso"]] <- CreateAssay5Object(counts = counts_table)
+
+# Step 1: Normalize the new assay data
+obj <- NormalizeData(obj, assay = "iso")
+obj <- FindVariableFeatures(obj, assay = "iso")
+obj <- ScaleData(obj, assay = "iso")
+
+# Step 4: Perform PCA
+obj <- RunPCA(obj, assay = "iso", reduction.name = "pca_iso")
+
+# Step 5: Run UMAP
+obj <- RunUMAP(obj, reduction = "pca_iso", dims = 1:10, assay = "iso", reduction.name = "umap_iso")
+
+
+# Visualize the UMAP
+DimPlot(obj, label = TRUE, reduction = "umap_iso", group.by = "sctype_db") | DimPlot(obj, label = TRUE, reduction = "umap", group.by = "sctype_db") 
+
+```
+
+
+```{r}
+# save the iso assay also 
+
+qs2::qs_save(
+    obj,
+    file   = here("output/day55_prom/", "seurat_objects", "day55_prom_with_iso.qs"))
+
+```
+
+
+```{r}
+
+
+
+plot_isoforms_exp_umap(
+  obj       = obj,
+  gene      = "VIM",
+  reduction = "umap",
+  slot      = "data",
+  n_features = NULL  # Optional: limit to top 5 isoforms
+)
+```
+
+# SQANTI
+Will do SQANTI analysis from the txt file. 
+```{r setup, echo=TRUE, warning=FALSE}
+library(rtracklayer)
+library(tidyr)
+library("stringr")
+library("biomaRt")
+library("here")
+library(GenomicFeatures)
+library(Biostrings)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(data.table)
+library("dplyr")
+```
+
+```{r, echo=TRUE, eval=FALSE}
+# 1. Load Seurat object and get the raw feature names
+### obj     <- readRDS("path/to/your_seurat_object.rds")
+DefaultAssay(obj) <- "iso"
+raw_feats <- rownames(obj)  
+head(raw_feats)
+
+# 2. Extract just the transcript IDs (the ENST part)
+transcript_ids <- sapply(strsplit(raw_feats, "-"), `[`, 1)
+head(transcript_ids)
+
+
+# 3. Import GTF and filter on transcript_id
+gtf        <- import("/data/scratch/users/yairp/FLAMESv2_Day55_prom_grid_2025/outs/remove_unknownstrand.gtf")
+filtered_gtf <- gtf[mcols(gtf)$transcript_id %in% transcript_ids]
+
+#inspect elements 
+as.data.frame(gtf) -> df.gtf
+as.data.frame(filtered_gtf) -> df.filtered.gtf
+
+# 5. Export just the transcript-based subset for SQANTI
+export(filtered_gtf, "../output/ref_file/day55_prom_filtered_for_sqanti.gtf")
+
+```
+
+
+### copied from sqanti script file 
+same analysis but this could be refine 
+
+
+## R 
+Create additional figures as required
+create a a big DF with all the data we will need for plotting 
+```{r , echo=FALSE}
+
+counts <- AggregateExpression(
+  obj_day55, 
+  assays = "iso", 
+  return.seurat = FALSE,
+  group.by = c("IntermediateType")
+)
+
+as.data.frame(counts) -> df
+
+row.names(df) -> df$gene
+
+#split transcript ids
+df <- df %>% separate(gene, into = c("transcript_id", "gene_id"), sep = "-",  extra = "merge")
+df$transcript_id <- sub("\\..*", "", df$transcript_id)
+
+###lets read in SQANTI classifiaction data 
+classifications <- read.table(here("output/day55_prom", "SQANTI_outs", "day55_prom_filtered_for_sqanti_classification.txt"), header = T)
+classifications$isoform <- sub("\\..*", "", classifications$isoform)
+
+  merged_data <- merge(df, classifications, 
+                     by.x = "transcript_id", 
+                     by.y = "isoform", 
+                     all.x = TRUE)
+  
+  merged_data <- merged_data %>% dplyr::filter(!is.na(structural_category)) %>% filter(!str_detect(gene_id, "BambuGene"))
+  
+# Retrieve gene biotype from Ensemble
+  mart <- useMart(biomart = "ensembl", 
+                 dataset = "hsapiens_gene_ensembl") # Change this to another mirror if available
+  
+attrs <- c(
+  # Transcript identifiers & basic flags
+  "ensembl_transcript_id",
+  "transcript_is_canonical",
+  "transcript_biotype")
+  
+  biotype_info_transcript <- getBM(attributes = attrs, filters = 'ensembl_transcript_id',
+                                   values = merged_data$transcript_id,
+                                   mart = mart)
+  
+  merged_data <- merge(merged_data, biotype_info_transcript, 
+                     by.x = "transcript_id", 
+                     by.y = "ensembl_transcript_id", 
+                     all.x = TRUE)
+```   
+
+## Here I want to add number of exons - and GC content 
+## not exactly sure whats gone wrong here - some isoforms have NA ???????
+```{r}  
+# 1. Import your GTF and build a TxDb
+txdb <- makeTxDbFromGFF(here("output", "ref_file", "day55_prom_filtered_for_sqanti.gtf"), format="gtf")
+
+# 2. Get exons grouped by transcript
+exons_list <- exonsBy(txdb, by="tx", use.names=TRUE)
+#   names(exons_list) are your ensembl transcript IDs
+
+# 3. Count exons per transcript
+exon_counts <- elementNROWS(exons_list)
+#   a named integer vector: names = transcript IDs, values = exon counts
+
+# 2) Extract transcript sequences
+tx_seqs <- extractTranscriptSeqs(Hsapiens, txdb)
+# At this point names(tx_seqs) are “1”,“2”,…  
+
+# 3) Re‐assign the correct names and ensure ordering matches exon_counts
+tx_ids_raw <- names(exon_counts)
+tx_ids     <- sub("\\.\\d+$", "", tx_ids_raw)   # remove version suffix
+if(length(tx_seqs) != length(tx_ids)) {
+  stop("Transcript count mismatch between exon_counts and tx_seqs")
+}
+names(tx_seqs) <- tx_ids
+tx_seqs       <- tx_seqs[tx_ids]
+
+# 4) Compute GC content (now names are ENST IDs)
+gc_matrix   <- letterFrequency(tx_seqs, letters = c("G","C"), as.prob = TRUE)
+gc_content  <- rowSums(gc_matrix)              # preserves names
+
+tx_length  <- width(tx_seqs)
+
+# 4) Turn both vectors into data.frames
+df <- data.frame(
+  ensembl_transcript_id = names(exon_counts),
+  exon_count            = as.integer(exon_counts),
+  gc_content            = as.numeric(gc_content),
+  transcript_length     = as.integer(tx_length),
+  stringsAsFactors      = FALSE
+)
+
+df$ensembl_transcript_id <- sub("\\..*", "", df$ensembl_transcript_id)
+## add this info to the SQANTI object
+
+merged_data <- merge(merged_data, df, 
+                     by.x = "transcript_id", 
+                     by.y = "ensembl_transcript_id", 
+                     all.x = TRUE)
+  
+```  
+
+
+```{r}   
+# Reshape the data to long format
+long_data <- merged_data %>%
+  pivot_longer(cols = starts_with("iso."), 
+               names_to = "cell_type", 
+               values_to = "expression")
+
+# Calculate the total and canonical isoforms by gene and cell type
+proportion_data <- long_data %>%
+  group_by(cell_type) %>%
+  summarise(
+    total_isoforms = sum(expression, na.rm = TRUE),
+    canonical_isoforms = sum(expression[transcript_is_canonical == 1], na.rm = TRUE),
+    non_canonical_isoforms = sum(expression[transcript_is_canonical == 0 | is.na(transcript_is_canonical)], na.rm = TRUE),
+    canonical_proportion = canonical_isoforms / total_isoforms
+  )
+
+
+# Handle cases where total_isoforms == 0 to avoid division by zero
+proportion_data <- proportion_data %>%
+  mutate(canonical_proportion = ifelse(total_isoforms > 0, canonical_proportion, NA))
+
+# Calculate non-canonical proportions
+proportion_data <- proportion_data %>%
+  mutate(non_canonical_proportion = 1 - canonical_proportion)
+
+# Reshape the data for the stacked bar plot
+proportion_data_long <- reshape2::melt(proportion_data, id.vars = "cell_type", 
+                             measure.vars = c("canonical_proportion", "non_canonical_proportion"),
+                             variable.name = "isoform_type", 
+                             value.name = "proportion")
+
+# Create the stacked bar plot with canonical isoforms at the bottom
+ggplot(proportion_data_long, aes(x = cell_type, y = proportion, fill = factor(isoform_type, levels = c("non_canonical_proportion", "canonical_proportion")))) +
+  geom_bar(stat = "identity", color = "black", size = 0.3) +  # Stacked bars with black outline
+  geom_text(aes(label = paste0(round(proportion * 100, 1), "%")),
+            position = position_stack(vjust = 0.5), color = "white", size = 3.5) +  # Percentage labels in bar
+  scale_fill_manual(values = c("canonical_proportion" = "grey", 
+                               "non_canonical_proportion" = "black"), 
+                    name = "Isoform Type",  # Legend title
+                    labels = c("canonical_proportion" = "Canonical Isoforms", 
+                               "non_canonical_proportion" = "Non-Canonical Isoforms")) +  # Legend labels
+  labs(title = "Proportion of Canonical vs Non-Canonical \n expression per Cell Type",
+       x = "Cell Type",
+       y = "Proportion") +
+  theme_minimal(base_size = 14) +  # Base font size
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12, face = "bold"),  # Rotate and bold x-axis labels
+        axis.text.y = element_text(size = 12),  # Y-axis label size
+        plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),  # Center and bold title
+        legend.position = "right",  # Show legend on the right
+        panel.grid.major = element_line(size = 0.2),  # Subtle grid lines
+        panel.grid.minor = element_blank())  # Remove minor grid lines
+
+
+```
+```{r}
+proportion_data_long$isoform_type <- factor(
+  proportion_data_long$isoform_type,
+  levels = c("canonical_proportion", "non_canonical_proportion")
+)
+
+# Create the pie charts faceted by cell_type
+pie_chart <- ggplot(proportion_data_long, 
+       aes(x = "", 
+           y = proportion, 
+           fill = isoform_type)) +
+  geom_col(color = "black", size = 0.3, width = 1) +            # Solid bar that becomes pie slice
+  coord_polar(theta = "y") +                                     # Turn bar into pie
+  facet_wrap(~ cell_type, ncol = 6) +                            # One pie per cell type, 3 per row
+  geom_text(aes(label = ifelse(proportion > 0.05,
+                               paste0(round(proportion * 100, 1), "%"),
+                               "")),
+            position = position_stack(vjust = 0.5),
+            color = "white",
+            size = 3) +                                           # Only label slices > 5%
+  scale_fill_manual(
+    values = c(
+      "canonical_proportion"      = "grey",
+      "non_canonical_proportion"  = "black"
+    ),
+    name   = NULL,  # no legend title
+    labels = c(
+      "canonical_proportion"     = "Canonical",
+      "non_canonical_proportion" = "Non-Canonical"
+    )
+  ) +
+  labs(
+    title = "Canonical vs Non-Canonical\n Isoform Proportions by Cell Type"
+  ) +
+  theme_void(base_size = 14) +  # clean theme for pies
+  theme(
+    plot.title        = element_text(hjust = 0.5, size = 16, face = "bold"),
+    strip.text        = element_text(size = 10, face = "bold"),
+    strip.placement   = "outside",
+    legend.position   = "bottom",
+    legend.text       = element_text(size = 12),
+    plot.margin       = margin(10, 10, 10, 10)
+  )
+
+
+pie_chart
+
+```
+
+## Including Plots
+
+```{r}
+#### by structural category
+# Filter and modify structural categories
+long_data_filt <- long_data %>%
+  filter(!str_detect(gene_id, "BambuGene")) %>% # remove all bambu Gene
+  filter(expression > 0) %>%
+  distinct(transcript_id, .keep_all = TRUE) %>% ## see if duplicates make a different to props ###### they do VERY IMPORTANT #######
+  dplyr::select(structural_category) %>%
+  mutate(structural_category = case_when(
+    structural_category %in% c("genic", "intergenic", "antisense", "fusion") ~ "other",
+    TRUE ~ structural_category  # Keep remaining categories
+  )) 
+
+
+# Compute total proportions across all data (no per-cell-type grouping)
+proportion_data <- long_data_filt %>%
+  group_by(structural_category) %>%
+  summarise(count = n()) %>%
+  mutate(proportion = count / sum(count)) %>%  # Calculate overall proportion
+  ungroup()
+
+# Define structural category order
+proportion_data$structural_category <- factor(proportion_data$structural_category,
+                                              levels = c("full-splice_match","novel_in_catalog", "novel_not_in_catalog", 
+                                                          "other"))
+
+# Define a custom color palette
+color_palette <- c(
+  "other" = "#969696",
+  "novel_not_in_catalog" = "coral2",
+  "novel_in_catalog" = "#78C679",
+  "full-splice_match" = "#6BAED6"
+)
+
+# Plot total proportion
+SQANTI_plot <- ggplot(proportion_data, aes(x = structural_category, y = proportion, fill = structural_category)) +
+  geom_bar(stat = "identity", color = "darkgrey", size = 0.3) +  # Stacked bars with outline
+  scale_fill_manual(values = color_palette, name = "Structural Category") +
+  labs(title = "Isoform Distribution by Structural Category",
+       x = "Structural Category",
+       y = "Proportion") +
+  geom_text(aes(label = scales::percent(proportion, accuracy = 0.1)),
+            position = position_stack(vjust = 0.5), size = 4, color = "black") +  # Label proportions
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12, face = "bold"),  # Rotate x-axis labels at 45°
+        axis.text.y = element_text(size = 12),  
+        plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),  
+        legend.position = "right",  
+        panel.grid.major = element_line(size = 0.2),  
+        panel.grid.minor = element_blank()) + ylim (0,1)
+
+
+SQANTI_plot
+```
+
+
+```{r cars}
+# Step 1: Filter out BambuGene, keep only expressed isoforms, and collapse duplicates by transcript_id
+unique_isoforms <- long_data %>%
+  filter(
+    !str_detect(gene_id, "BambuGene"),  # drop any row whose gene_id contains "BambuGene"
+    expression > 0                       # keep only isoforms with expression > 0
+  ) %>%
+  distinct(transcript_id, .keep_all = TRUE)  # keep only one row per transcript_id
+
+# Step 2: Total number of unique isoforms (regardless of name)
+total_isoforms <- unique_isoforms %>%
+  summarise(n_total = n_distinct(transcript_id)) %>%
+  pull(n_total)
+
+# Step 3: Number of “novel” isoforms (those whose transcript_id begins with "BambuTx")
+n_novel_isoforms <- unique_isoforms %>%
+  filter(str_detect(transcript_id, "^BambuTx")) %>%
+  summarise(n_novel = n_distinct(transcript_id)) %>%
+  pull(n_novel)
+
+# Print the results
+cat("Total unique isoforms: ", total_isoforms, "\n")
+cat("Novel isoforms (BambuTx*): ", n_novel_isoforms, "\n")
+
+
+#~8% novel
+```
+so about 7.3% novel isofroms 
+
+
+```{r}
+
+# ------------------------------------------------------------------------------
+# 1) First, compute “number of unique isoforms per gene”
+#    We assume your data frame is named `long_data` and has at least these columns:
+#      • gene_id
+#      • transcript_id
+#    If there are duplicates (e.g. the same isoform appearing multiple times), 
+#    we collapse them so each (gene_id, transcript_id) pair counts only once.
+# ------------------------------------------------------------------------------
+isoforms_per_gene <- long_data %>%
+  # keep only expressed isoforms, drop any “BambuGene” if desired:
+  #filter(expression > 0, !str_detect(gene_id, "BambuGene")) %>%
+  distinct(gene_id, transcript_id, .keep_all = TRUE) %>% 
+  group_by(gene_id) %>%
+  summarise(n_isoforms = n()) %>%
+  ungroup()
+
+# ------------------------------------------------------------------------------
+# 2) Next, create discrete bins: “1”, “2–3”, “4–5”, “>=6”
+# ------------------------------------------------------------------------------
+isoforms_per_gene <- isoforms_per_gene %>%
+  mutate(
+    iso_bin = case_when(
+      n_isoforms == 1            ~ "1",
+      n_isoforms >= 2 & n_isoforms <= 3  ~ "2–3",
+      n_isoforms >= 4 & n_isoforms <= 5  ~ "4–5",
+      n_isoforms >= 6            ~ ">=6",
+      TRUE                        ~ NA_character_
+    )
+  )
+
+# ------------------------------------------------------------------------------
+# 3) Calculate the percentage of genes falling into each bin
+# ------------------------------------------------------------------------------
+bin_counts <- isoforms_per_gene %>%
+  group_by(iso_bin) %>%
+  summarise(count = n()) %>%
+  mutate(
+    pct = count / sum(count) * 100
+  ) %>%
+  ungroup()
+
+# (Optionally, re‐order the factor levels so the x‐axis appears in the desired order)
+bin_counts$iso_bin <- factor(bin_counts$iso_bin, levels = c("1", "2–3", "4–5", ">=6"))
+
+# ------------------------------------------------------------------------------
+# 4) Define a custom color palette matching the example image:
+#      • “1”     → orange
+#      • “2–3”   → green
+#      • “4–5”   → red (or coral)
+#      • “>=6”  → gray
+# ------------------------------------------------------------------------------
+
+# ───────────────────────────────────────────────────────────────────────────────
+# 4) Define the exact four‐color palette:
+# ───────────────────────────────────────────────────────────────────────────────
+my_colors <- c(
+  "1"   = "#FFA500",   # orange
+  "2–3" = "#228B22",   # green
+  "1" = "#FA8072",   # coral/red
+  ">=6" = "#808080"    # gray
+)
+
+# ───────────────────────────────────────────────────────────────────────────────
+# 5) Create the bar plot with Y‐axis limited to 50:
+# ───────────────────────────────────────────────────────────────────────────────
+isoforms_per_gene <- ggplot(bin_counts, aes(x = iso_bin, y = pct, fill = iso_bin)) +
+  geom_col(color = "black", size = 0.2, width = 0.8) +
+  #scale_fill_manual(values = my_colors, guide = FALSE) +
+  geom_text(aes(label = paste0(round(pct, 1), "%")),
+            vjust = -0.5, size = 4, color = "black") +
+  scale_y_continuous(limits = c(0, 50), expand = c(0, 0)) +
+  labs(
+    title = "Number of isoforms per gene",
+    x = "Isoforms per Gene",
+    y = "Genes, %"
+  ) +
+  theme_bw(base_size = 14) +
+  theme(
+    plot.title         = element_text(hjust = 0.5, face = "bold", size = 16),
+    axis.title.x       = element_text(size = 14, face = "bold"),
+    axis.title.y       = element_text(size = 14, face = "bold"),
+    axis.text.x        = element_text(size = 12, face = "bold"),
+    axis.text.y        = element_text(size = 12),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor   = element_blank(),
+    legend.position    = "none"
+  )
+
+isoforms_per_gene
+```
+
+
+
+# Isofomrs per gene 
+```{r}
+# ------------------------------------------------------------------------------
+# 1) (Re‐compute) or assume your isoform_summary exists. For illustration:
+# ------------------------------------------------------------------------------
+isoform_summary <- long_data %>%
+  filter(
+    !str_detect(gene_id, "BambuGene"),
+    expression > 0
+  ) %>%
+  distinct(gene_id, transcript_id, .keep_all = TRUE) %>%
+  group_by(gene_id) %>%
+  summarise(
+    n_isoforms = n_distinct(transcript_id),
+    isoforms   = paste(sort(transcript_id), collapse = ", ")
+  ) %>%
+  ungroup() %>%
+  arrange(desc(n_isoforms))
+
+# (Optional) If you only want the top 10 genes:
+top10_genes <- isoform_summary %>% slice_max(order_by = n_isoforms, n = 10)
+top10_genes$isoforms <- NULL
+# ------------------------------------------------------------------------------
+# 2) Convert your data frame into a table grob:
+#    You can either use tableGrob (gives more control) or grid.table (quick shortcut).
+# ------------------------------------------------------------------------------
+top10_genes
+
+```
+
+## subcatergoreis of Novel isoforms 
+```{r}
+long_data_novel <- long_data %>%
+  filter( grepl("BambuTx", transcript_id) )
+
+# 1. Deduplicate so each transcript_id only contributes once
+long_unique <- long_data_novel %>%
+  distinct(transcript_id, subcategory)
+
+
+# 2. Count how many transcripts fall in each subcategory
+subcat_counts <- long_unique %>%
+  dplyr::count(subcategory) %>%
+  mutate(prop = n / sum(n))
+
+# 3. Plot as a bar chart of proportions
+ggplot(subcat_counts, aes(x = subcategory, y = prop)) +
+  geom_col(fill = "steelblue") +
+  scale_y_continuous(labels = scales::percent_format(1)) +
+  labs(
+    x = "Novel Isoform Subcategory",
+    y = "Proportion of Transcripts",
+    title = "Proportion of Each Novel Isoform Subcategory"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+# NUmber of novel isoforms in each cell type 
+
+```{r}
+iso_counts <- long_data_novel %>%
+  distinct(transcript_id, cell_type, expression) %>%
+  filter(expression > 0) %>%
+  dplyr::count(cell_type, name = "n_isoforms")
+
+# 2. Bar‐plot
+ggplot(iso_counts, aes(x = cell_type, y = n_isoforms)) +
+  geom_col(fill = "steelblue") +
+  labs(
+    x     = "Cell Type",
+    y     = "Number of Unique Isoforms",
+    title = "Isoform Counts per Cell Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+### more retained introns in any catergory of cell type 
+```{r}
+# 1. Deduplicate so each transcript_id only counts once per celltype
+long_unique <- long_data_novel %>%
+  distinct(transcript_id, cell_type, structural_category, expression) %>% filter(expression > 1)
+
+# 2. For each celltype, count how many unique isoforms fall in each subcategory
+prop_df <- long_unique %>%
+  group_by(cell_type) %>% 
+  mutate(total_iso = n()) %>%        # total unique isoforms in this celltype
+  ungroup() %>%
+  group_by(cell_type, structural_category) %>%
+  summarise(
+    count = n(),                     # unique isoforms in this subcategory
+    total = dplyr::first(total_iso),        # carry along the total
+    prop  = count / total            # proportion for this celltype
+  ) %>%
+  ungroup()
+
+# 3. Sanity check: proportions sum to 1 *within* each celltype
+prop_df %>% 
+  group_by(cell_type) %>% 
+  summarise(sum_prop = sum(prop))   # each should be 1
+
+# 4. Plot
+ggplot(prop_df, aes(x = structural_category, y = prop, fill = cell_type)) +
+  geom_col(
+    position = position_dodge(width = 0.8), 
+    width    = 0.7
+  ) +
+  scale_y_continuous(labels = scales::percent_format(1)) +
+  labs(
+    x     = "Isoform Category",
+    y     = "Proportion of Isoforms",
+    title = "Novel Isoform Category Composition by Cell Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x   = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+
+```
+
+
+
+```{r}
+# 1. Deduplicate so each transcript_id only counts once per celltype
+long_unique <- long_data_novel %>%
+  distinct(transcript_id, cell_type, subcategory, expression) %>% filter(expression > 1)
+
+# 2. For each celltype, count how many unique isoforms fall in each subcategory
+prop_df <- long_unique %>%
+  group_by(cell_type) %>% 
+  mutate(total_iso = n()) %>%        # total unique isoforms in this celltype
+  ungroup() %>%
+  group_by(cell_type, subcategory) %>%
+  summarise(
+    count = n(),                     # unique isoforms in this subcategory
+    total = dplyr::first(total_iso),        # carry along the total
+    prop  = count / total            # proportion for this celltype
+  ) %>%
+  ungroup()
+
+# 3. Sanity check: proportions sum to 1 *within* each celltype
+prop_df %>% 
+  group_by(cell_type) %>% 
+  summarise(sum_prop = sum(prop))   # each should be 1
+
+# 4. Plot
+ggplot(prop_df, aes(x = subcategory, y = prop, fill = cell_type)) +
+  geom_col(
+    position = position_dodge(width = 0.8), 
+    width    = 0.7
+  ) +
+  scale_y_continuous(labels = scales::percent_format(1)) +
+  labs(
+    x     = "Isoform Subcategory",
+    y     = "Proportion of Isoforms",
+    title = "Isoform Subcategory Composition by Cell Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x   = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+
+```
+###
+Are there Cell type specific isoforms
+Make it simple and go for a binary definition. presence or absence 
+
+```{r}
+
+# 1. Summarize per isoform × cell type as before
+summary_tbl <- long_data %>%
+  group_by(transcript_id, cell_type) %>%
+  summarize(
+    # number of cells with expression > 0
+    n_cells    = sum(expression > 0),
+    # total expression across those cells
+    total_expr = sum(expression),
+    # presence flag
+    present    = n_cells > 0,
+    .groups    = "drop"
+  )
+
+# 2. Identify isoforms present in exactly one cell type
+specific_isoforms <- summary_tbl %>%
+  filter(present) %>%                # keep only those detected
+  group_by(transcript_id) %>%
+  filter(n() == 1) %>%               # exactly one cell type
+  ungroup() %>%
+  dplyr::select(transcript_id, cell_type, n_cells, total_expr)
+
+# 3. Pull back the gene symbol from your original data
+gene_map <- long_data %>%
+  dplyr::select(transcript_id, gene_id) %>%
+  distinct()
+
+# 4. Join it on
+specific_isoforms <- specific_isoforms %>%
+  left_join(gene_map, by = "transcript_id") %>%
+  dplyr::select(transcript_id, gene_id, cell_type, n_cells, total_expr)
+
+# 5. View your final table
+specific_isoforms
+
+```
+```{r}
+transcript_counts <- specific_isoforms %>%
+  dplyr::distinct(transcript_id, cell_type) %>%
+  dplyr::count(cell_type, name = "n_transcripts")
+
+# 2. Bar‐plot
+ggplot(transcript_counts, aes(x = cell_type, y = n_transcripts)) +
+  geom_col(fill = "steelblue") +
+  labs(
+    x     = "Cell Type",
+    y     = "Number of Unique Transcripts",
+    title = "Unique Transcript per Cell Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+```
+
+
+
+Are Novel Isoforms more likely to be cell type specific?? 
+```{r}
+
+# Total number of specific isoforms
+total_specific <- nrow(specific_isoforms)
+
+# Number of those that are novel
+novel_specific <- specific_isoforms %>%
+  filter(grepl("BambuTx", transcript_id)) %>%
+  nrow()
+
+# And compute the percentage
+percent_novel <- novel_specific / total_specific * 100
+
+cat("percent novel:", percent_novel, "\n")
+# 1) Flag “novel” vs “known” by transcript_id pattern
+iso_flagged <- long_data %>%
+  distinct(transcript_id) %>%
+  mutate(
+    is_novel = grepl("BambuTx", transcript_id)
+  )
+
+# 2) Determine cell-type specificity per transcript
+presence_tbl <- long_data %>%
+  group_by(transcript_id, cell_type) %>%
+  summarize(present = any(expression > 0), .groups = "drop")
+
+iso_specific <- presence_tbl %>%
+  group_by(transcript_id) %>%
+  summarize(
+    n_ct       = sum(present),
+    is_specific = n_ct == 1,
+    .groups    = "drop"
+  )
+
+# 3) Combine flags into one summary table
+iso_summary <- iso_flagged %>%
+  inner_join(iso_specific, by = "transcript_id")
+
+# 4) Build the 2×2 table
+tbl <- table(
+  Novel        = iso_summary$is_novel,
+  Specific     = iso_summary$is_specific
+)
+
+# 5) Run Fisher’s exact test
+fisher_res <- fisher.test(tbl)
+
+# 6) View results
+print(tbl)
+print(fisher_res)
+
+
+
+```
+
+#####
+
+Very significant effect. 
+So ~7.3% novel isofroms in total, 
+In terms of isofroms specific enrichment 11% of isofroms are novel  --?? 
+
+
+### lets look at isoform specificity by cell clsuter. 
+
+```{r}
+# 1) For each transcript × cell_type, did we detect it at all?
+presence_tbl <- long_data %>%
+  group_by(transcript_id, cell_type) %>%
+  summarize(present = any(expression > 0), .groups = "drop")
+
+# 2) Count how many cell types each transcript appears in
+nct_tbl <- presence_tbl %>%
+  group_by(transcript_id) %>%
+  summarize(n_celltypes = sum(present), .groups = "drop")
+
+# 3) Tabulate frequencies of each n_celltypes
+freq_tbl <- nct_tbl %>%
+  dplyr::count(n_celltypes, name = "n_isoforms") %>%
+  filter(n_celltypes > 0) # there are 25 isofroms in this lsit whith expresstion = 0. have checked they do have 0 expresstion don't why theya re in the data
+
+# 4) Plot
+ggplot(freq_tbl, aes(x = factor(n_celltypes), y = n_isoforms)) +
+  geom_col(fill = "grey") +
+  geom_text(
+    aes(label = n_isoforms),
+    vjust = -0.3,                    # push labels just above bars
+    size  = 3.5
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +  # give headroom
+  labs(
+    x = "Number of Cell Types Detected In",
+    y = "Number of Isoforms",
+    title = "Distribution of Isoforms Found Across Cell Types", 
+        caption = "Note: each isoform is counted once per cell type (expression > 0)."
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+
+```{r}
+
+# 3. Flag novel vs known by transcript_id pattern
+nct_tbl <- nct_tbl %>%
+  mutate(is_novel = grepl("BambuTx", transcript_id))
+
+# 4. Tabulate counts of novel vs known within each n_celltypes
+stacked_tbl <- nct_tbl %>%
+  group_by(n_celltypes, is_novel) %>%
+  summarize(n_isoforms = n(), .groups = "drop") %>%
+  # ensure that known comes before novel in the legend
+  mutate(is_novel = factor(is_novel, levels = c(FALSE, TRUE),
+                           labels = c("known","novel")))
+
+# Compute % novel per n_celltypes
+pct_tbl <- stacked_tbl %>%
+  group_by(n_celltypes) %>%
+  summarize(
+    total     = sum(n_isoforms),
+    novel_ct  = sum(n_isoforms[is_novel=="novel"])
+  ) %>%
+  mutate(pct_novel = novel_ct / total * 100)
+
+# Plot
+ggplot(stacked_tbl, aes(x = factor(n_celltypes), y = n_isoforms, fill = is_novel)) +
+  geom_col() +
+  # % labels above each bar
+  geom_text(
+    data = pct_tbl,
+    aes(
+      x     = factor(n_celltypes),
+      y     = total,
+      label = sprintf("%.1f%%", pct_novel)
+    ),
+    vjust       = -0.5,
+    inherit.aes = FALSE
+  ) +
+  scale_fill_manual(
+    name   = "Isoform type",
+    values = c("known" = "grey80", "novel" = "steelblue")
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  labs(
+    x     = "Number of Cell Types Detected In",
+    y     = "Number of Isoforms",
+    title = "Isoform Pervasiveness: Known vs Novel",
+    caption = "Percentages show novel isoforms per group"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x     = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom",
+    plot.caption    = element_text(size = 8, hjust = 0)
+  )
+```
+
+
+
+
+```{r}
+# 1–4: same data prep as before…
+presence_tbl <- long_data %>%
+  group_by(transcript_id, cell_type) %>%
+  summarize(present = any(expression > 0), .groups = "drop")
+
+nct_tbl <- presence_tbl %>%
+  group_by(transcript_id) %>%
+  summarize(n_celltypes = sum(present), .groups = "drop")
+
+annot_tbl <- long_data %>%
+  dplyr::select(transcript_id, exon_count, transcript_length, gc_content) %>%
+  distinct()
+
+grouped_iso <- nct_tbl %>%
+  inner_join(annot_tbl, by = "transcript_id")
+
+# 6. Boxplot — exon count by number of cell types (no outliers)
+p_exons <- ggplot(grouped_iso, aes(x = factor(n_celltypes), y = exon_count)) +
+  geom_boxplot(fill = "grey80", outlier.shape = NA) +
+  labs(
+    x     = "Detected in N Cell Types",
+    y     = "Exon Count",
+    title = "Exon Count by Cell-Type Pervasiveness"
+  ) +
+  theme_minimal() +
+  ylim(0,10) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# 7. Boxplot — transcript length (no outliers)
+p_length <- ggplot(grouped_iso, aes(x = factor(n_celltypes), y = transcript_length)) +
+  geom_boxplot(fill = "lightgreen", outlier.shape = NA) +
+  labs(
+    x     = "Detected in N Cell Types",
+    y     = "Transcript Length (bp)",
+    title = "Transcript Length by Cell-Type Pervasiveness"
+  ) +
+  theme_minimal() +
+  ylim(0,7500) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# 8. Boxplot — GC content (no outliers)
+p_gc <- ggplot(grouped_iso, aes(x = factor(n_celltypes), y = gc_content)) +
+  geom_boxplot(fill = "lightblue", outlier.shape = NA) +
+  labs(
+    x     = "Detected in N Cell Types",
+    y     = "GC Content",
+    title = "GC Content by Cell-Type Pervasiveness"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# 9. Combine plots
+(p_exons | p_length) / p_gc
+
+
+```
+How many novel exons do we find? 
+
+```{r}
+library(rtracklayer)
+library(GenomicRanges)
+library(dplyr)
+
+#–– 1) build your full novel‐exon table ––#
+get_novel_exon_table <- function(ref_gtf, qry_gtf, exon.type = "exon") {
+  # import
+  ref  <- import(ref_gtf);      ref_exons <- ref[ref$type == exon.type]
+  qry  <- import(qry_gtf);      qry_exons <- qry[qry$type == exon.type]
+  
+  # union of known
+  ref_union <- GenomicRanges::reduce(ref_exons)
+  
+  # pick novel query exons (no overlap with known union)
+  novel_idx    <- which(!overlapsAny(qry_exons, ref_union))
+  novel_exons  <- qry_exons[novel_idx]
+  
+  # build df of each interval + its gene & transcript
+  df <- data.frame(
+    seqnames      = as.character(seqnames(novel_exons)),
+    start         = start(novel_exons),
+    end           = end(novel_exons),
+    strand        = as.character(strand(novel_exons)),
+    gene_id       = mcols(novel_exons)$gene_id,
+    transcript_id = mcols(novel_exons)$transcript_id,
+    stringsAsFactors = FALSE
+  )
+  
+  df %>%
+    group_by(seqnames, start, end, strand) %>%
+    summarise(
+      gene_id       = paste(unique(gene_id), collapse=";"),
+      transcript_id = paste(unique(transcript_id), collapse=";"),
+      .groups = "drop"
+    ) %>%
+    as.data.frame()
+}
+
+#–– 2) count simply delegates to the table function ––#
+count_novel_exons <- function(ref_gtf, qry_gtf, exon.type = "exon") {
+  novel_table <- get_novel_exon_table(ref_gtf, qry_gtf, exon.type)
+  nrow(novel_table)
+}
+
+# —— example usage —— #
+ref_gtf <- "/data/scratch/users/yairp/FLAMES_Day55/resources/gencode.v47.annotation.gtf"
+qry_gtf <- here("output","ref_file","day55_prom_filtered_for_sqanti.gtf")
+
+# get table
+novel_exon_table <- get_novel_exon_table(ref_gtf, qry_gtf)
+
+# get count
+n_count <- count_novel_exons(ref_gtf, qry_gtf)
+
+# verify they match:
+stopifnot(n_count == nrow(novel_exon_table))
+
+# print out
+cat("Found", n_count, "unique novel exon loci.\n")
+head(novel_exon_table)
+
+
+```
+
+Are the novel exons specific to a cell type
+
+
+
+
+###### add in old quants to the object 
+```{r}
+# Join count matrix with gene info
+df_genesymbol <- FLAMES_quants %>%
+  left_join(gene_dict, by = "transcript_id")
+
+# Add combined transcript_id + gene_symbol as rownames
+rownames(df_genesymbol) <- paste0(df_genesymbol$transcript_id, "_", df_genesymbol$gene_symbol)
+
+# Optionally filter out any gene_id containing "BambuGene"
+df_genesymbol <- df_genesymbol %>% dplyr::filter(!grepl("BambuGene", gene_id.x, fixed = TRUE))
+
+# Drop the original identifier columns
+df_genesymbol$transcript_id <- NULL
+df_genesymbol$gene_id <- NULL
+df_genesymbol$gene_symbol <- NULL
+df_genesymbol$gene_id.x <- NULL
+df_genesymbol$gene_id.y <- NULL
+
+# save file
+#write.csv(df_genesymbol, "../data/day55_prom/isoform_counts/gene_symbol_flamesquants_nobambu_gene_day55_prom.csv")
+
+  # Read the CSV file
+  counts <- fread("../data/day55_prom/isoform_counts/gene_symbol_flamesquants_nobambu_gene_day55_prom.csv")
+  counts <- as.data.frame(counts) 
+  rownames(counts) <- counts[[1]]            # Set row names from the first column
+  counts[[1]] <- NULL     
+  
+  # Create the Seurat object
+  seurat_obj <- CreateSeuratObject(counts = counts, project = "day55", min.cells = 5, min.features = 500)
+  
+  seurat_obj
+  
+  #######
+  
+  ## filter the data to iso and gene cells match
+seurat_isoform_filtered <- subset(seurat_obj, cells =obj_day55@graphs[["RNA_nn"]]@Dimnames[[1]])
+
+VlnPlot(seurat_isoform_filtered, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# perform standard workflow steps
+seurat_isoform_filtered <- NormalizeData(object = seurat_isoform_filtered) 
+seurat_isoform_filtered <- FindVariableFeatures(object = seurat_isoform_filtered)
+seurat_isoform_filtered <- ScaleData(object = seurat_isoform_filtered)
+seurat_isoform_filtered <- RunPCA(object = seurat_isoform_filtered)
+ElbowPlot(seurat_isoform_filtered)
+seurat_isoform_filtered <- FindNeighbors(object = seurat_isoform_filtered, dims = 1:10)
+seurat_isoform_filtered <- FindClusters(object = seurat_isoform_filtered, resolution = 0.6)
+seurat_isoform_filtered <- RunUMAP(object = seurat_isoform_filtered, dims = 1:10)
+
+
+counts_table <- seurat_isoform_filtered[["RNA"]]$counts
+
+obj_day55[["iso_flamesquant"]] <- CreateAssay5Object(counts = counts_table)
+
+# Step 1: Normalize the new assay data
+obj_day55 <- NormalizeData(obj_day55, assay = "iso_flamesquant")
+obj_day55 <- FindVariableFeatures(obj_day55, assay = "iso_flamesquant")
+obj_day55 <- ScaleData(obj_day55, assay = "iso_flamesquant")
+
+# Step 4: Perform PCA
+obj_day55 <- RunPCA(obj_day55, assay = "iso_flamesquant", reduction.name = "pca_iso_flamesquant")
+
+# Step 5: Run UMAP
+obj_day55 <- RunUMAP(obj_day55, reduction = "pca_iso_flamesquant", dims = 1:10, assay = "iso_flamesquant", reduction.name = "umap_iso_flamesquant")
+
+
+# Visualize the UMAP
+DimPlot(obj_day55, label = TRUE, reduction = "umap_iso", group.by = "sctype_db") | DimPlot(obj_day55, label = TRUE, reduction = "umap", group.by = "sctype_db") | DimPlot(obj_day55, label = TRUE, reduction = "umap_iso_flamesquant", group.by = "sctype_db")
+
+qs2::qs_save(
+    obj_day55,
+    file   = here("output/day55_prom/", "seurat_objects", "day55_prom_with_iso_flamesquats.qs"))
+```
+
+
+### check violin of counts between quant methods
+
+```{r}
+
+VlnPlot(obj_day55, assay = "iso", group.by = "orig.ident", features = c("nCount_iso_flamesquant", "nFeature_iso_flamesquant")) |
+VlnPlot(obj_day55, assay = "iso", group.by = "orig.ident", features = c("nCount_iso", "nFeature_iso")) 
+
+
+
+# Get metadata from Seurat object
+meta <- obj_day55@meta.data
+
+# Define features of interest
+features <- c("nCount_iso_flamesquant", "nFeature_iso_flamesquant", "nCount_iso", "nFeature_iso")
+
+# Compute median per orig.ident for each feature
+medians <- meta %>%
+  dplyr::select(orig.ident, all_of(features)) %>%
+  group_by(orig.ident) %>%
+  summarise(across(all_of(features), median, na.rm = TRUE), .groups = "drop")
+
+# View results
+print(medians)
+```

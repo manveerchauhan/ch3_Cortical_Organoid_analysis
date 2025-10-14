@@ -1,0 +1,262 @@
+---
+title: "DTU"
+author: "Sefi"
+date: "`r Sys.Date()`"
+output: html_document
+---
+---
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Differential Transcript Usage (DTU)
+Differential Transcript Usage (DTU) or Isoform switching refers to the study of changes in the relative expression of different transcript isoforms from the same gene across conditions, cell types, or time points. Unlike traditional gene-level analysis, which focuses on total gene expression, DTU provides insights into how alternative splicing or isoform regulation contributes to cellular processes and phenotypic differences.
+
+This analysis is particularly useful for understanding complex regulatory mechanisms, such as those involved in neuronal differentiation, disease progression, or cell state transitions. By identifying isoforms that are preferentially expressed under specific conditions.
+
+This space is relatively new for single cell sequencing and therefore tools specifically designed for this analysis are not really available. Therefore we will use a tool designed for bulk analysis called the Isoform Switch Analyzer. The link to the vignette can be found here: <https://www.bioconductor.org/packages/release/bioc/vignettes/IsoformSwitchAnalyzeR/inst/doc/IsoformSwitchAnalyzeR.html>
+
+We will load the packages and subset the data to a smaller set of cells.
+
+```{r DTU setup, echo=TRUE, message=FALSE, warning=FALSE, eval=FALSE}
+library(DRIMSeq)
+library(DEXSeq)
+library(stageR)
+library(IsoformSwitchAnalyzeR)
+library(rtracklayer)
+library(Seurat)
+library(here)
+library(qs2)
+```
+
+```{r}
+obj <- qs2::qs_read(here("output","seurat_objects", "seurat_filt_harm_annotated_iso.qs"))
+obj <- JoinLayers(obj)
+```
+
+
+```{r}
+###subset object for testing
+# Define the cell types to keep
+#table(obj$BroadType)
+#cell_types_to_keep <- c("Stem cells", "Radial‐glial")
+
+#Idents(obj) <- "BroadType"
+# Subset the object based on the metadata
+#subset_obj <- subset(obj, subset = BroadType %in% cell_types_to_keep)
+
+##
+
+obj -> subset_obj
+# Check the result
+table(subset_obj@meta.data$BroadType)
+
+
+#Get pseudobulk counts split by sample and celll type
+pseudo.seurat.isoforms <- AggregateExpression(
+  subset_obj, 
+  assays = "iso", 
+  return.seurat = FALSE,
+  group.by = c("orig.ident", "Day")
+)
+
+
+#make df
+pseudo.seurat.isoforms.df <- as.data.frame(pseudo.seurat.isoforms)
+colnames(pseudo.seurat.isoforms.df)
+
+##define sample condtions
+sample_data <-as.data.frame(colnames(pseudo.seurat.isoforms.df))
+
+# Rename the column for clarity
+colnames(sample_data) <- "colnames"
+
+# Split the column names into sampleID and celltype
+split_sample_data <- strsplit(sample_data$colnames, "_")
+
+# Create a new data frame with the original column names and extracted sampleID and celltype
+samps <- data.frame(
+  sampleID = sample_data$colnames,
+  condition = sapply(split_sample_data, `[`, 2)
+)
+
+samps$condition <- as.factor(samps$condition)
+
+## Before generating a switch list we need to subset both the gtf and counts to ensure we have a 1:1 match 
+#read in gtf 
+tx2gene <- import(here("output/ref_file/filtered_for_sqanti.gtf"))
+
+# Set row names of pseudo.seurat.isoforms.df to the transcript_id column
+# Extract the row names
+rownames_split <- strsplit(rownames(pseudo.seurat.isoforms.df), "-")
+# Add new columns 'transcript_id' and 'gene_id' to the data frame
+rownames(pseudo.seurat.isoforms.df) <- sapply(rownames_split, `[`, 1)
+
+subset_txt2gene <- tx2gene[tx2gene$transcript_id %in% row.names(pseudo.seurat.isoforms.df), ]
+subset_cts <- pseudo.seurat.isoforms.df[row.names(pseudo.seurat.isoforms.df) %in% tx2gene$transcript_id, ]
+
+# write gtf
+export(subset_txt2gene, here("output/DTU/time.gtf"), format = "gtf")
+
+#### genrate a switch list
+aSwitchList <- importRdata(
+  isoformCountMatrix   = subset_cts,
+  isoformRepExpression = subset_cts,
+  designMatrix         = samps,
+  isoformExonAnnoation = here("output/DTU/time.gtf"),
+  isoformNtFasta       = "/data/scratch/users/yairp/Kolf2.1_FLAMESv2/outs/Bambu_NDR_0.75/transcript_assembly.fa", # provide the FLAMES transcript_output .fasta
+  showProgress = TRUE,
+  fixStringTieAnnotationProblem = TRUE
+)
+
+#summary of switch lsit
+summary(aSwitchList)
+
+#saveRDS(aSwitchList, here("output/DTU/aSwitchList.rds"))
+
+#Add ORF info
+aSwitchList_ORF <- analyzeORF(switchAnalyzeRlist = aSwitchList, orfMethod = "longest" )
+qs2::qs_save(aSwitchList_ORF, here("output/DTU/time_aSwitchList_ORF.qs"))
+
+#saveRDS("./output_files/mutli_sample/Radial_glia_GABA_neurons_switch_list_ORF.rds", object = aSwitchList_ORF)
+
+# save the switch lsit with the ORFs
+#may need to load with qs2
+#aSwitchList_ORF <- readRDS("./output_files/mutli_sample/Radial_glia_GABA_neurons_switch_list_ORF.rds")
+
+#Add gene symbol to switch lsit 
+resource_table <- read.csv(here("output/ref_file/isoform_gene_dict.csv"), header = T)
+
+# Access the isoform features list
+isoform_features <- aSwitchList_ORF[["isoformFeatures"]]
+
+# Use match to fill in the 'gene_name' based on 'gene_id'
+isoform_features[["gene_name"]] <- resource_table$gene_symbol[match(isoform_features[["gene_id"]], resource_table$gene_id)]
+
+# Save the updated isoformFeatures back into the main list
+aSwitchList_ORF[["isoformFeatures"]] <- isoform_features
+
+
+# Filter switch list
+SwitchListFiltered <- preFilter(
+  switchAnalyzeRlist = aSwitchList_ORF,
+  geneExpressionCutoff = 30,
+  isoformExpressionCutoff = 20, 
+  removeSingleIsoformGenes = TRUE)
+
+# Execute Switch testing 
+SwitchListAnalyzed <- isoformSwitchTestDEXSeq(
+  switchAnalyzeRlist = SwitchListFiltered,
+  reduceToSwitchingGenes=FALSE,
+  reduceFurtherToGenesWithConsequencePotential=FALSE,
+  alpha = 0.01,
+  dIFcutoff = 0.25,
+  onlySigIsoforms=FALSE
+)
+
+qs2::qs_save(SwitchListAnalyzed, here("output/DTU/SwitchListAnalyzed_time.qs"))
+
+#saveRDS("./output_files/mutli_sample/Radial_glia_GABA_SwitchListAnalyzed.rds", object = SwitchListAnalyzed)
+```
+
+```{r DTU_plots, setup, echo=TRUE, message=FALSE, warning=FALSE}
+# read in file that ahs been processed if need be
+#SwitchListAnalyzed <- qs_read(here("output/DTU/SwitchListAnalyzed_time.qs"))
+
+summary <- extractSwitchSummary(SwitchListAnalyzed)
+
+
+extractTopSwitches(SwitchListAnalyzed, n=20)
+
+# Main results file
+iso_feat <- as.data.frame(SwitchListAnalyzed$isoformFeatures)
+
+write.csv(SwitchListAnalyzed$isoformFeatures, here("output/DTU/time_dtu.csv"))
+#extractSwitchSummary(SwitchListAnalyzed)
+
+
+##### genrate some plots ####
+switchPlot(
+  SwitchListAnalyzed,
+  gene="PKM",
+  condition1 = "STC",
+  condition2 = 'Day80',
+  #condition3 = 'Radial.glial',
+  localTheme = theme_bw(base_size = 13,) # making text sightly larger for vignette
+)
+
+#output switch plots for all
+switchPlotTopSwitches(
+  switchAnalyzeRlist = SwitchListAnalyzed, 
+  n = 10,
+  onlySigIsoforms = T,
+  dIFcutoff = 0.25,
+  splitFunctionalConsequences = F,
+  filterForConsequences = FALSE, #this could be changed to add in consequences
+  fileType = "pdf",                                 
+  pathToOutput = here("output/DTU/"),
+  alpha = 0.01
+)
+```
+
+
+DTU summary table
+```{r}
+summary_dtu <- iso_feat %>%
+  mutate(sig_gene = gene_switch_q_value < 0.01,
+         sig_iso  = isoform_switch_q_value < 0.01) %>%
+  summarise(
+    n_sig_genes    = n_distinct(gene_id[sig_gene]),
+    n_sig_isoforms = n_distinct(isoform_id[sig_iso])
+  )
+
+summary_dtu
+
+dtu_by_comparison <- iso_feat %>%
+  group_by(condition_1, condition_2) %>%
+  summarise(
+    n_dtu_genes    = n_distinct(gene_id[gene_switch_q_value < 0.01]),
+    n_dtu_isoforms = n_distinct(isoform_id[isoform_switch_q_value < 0.01]),
+    .groups = "drop"
+  )
+
+dtu_by_comparison
+
+```
+
+
+PKM hits
+```{r}
+# Filter for significant isoforms (q < 0.01)
+sig_iso <- iso_feat %>%
+  filter(isoform_switch_q_value < 0.01)
+
+# How many distinct genes at this threshold?
+n_genes <- n_distinct(sig_iso$gene_id)
+
+# Now check specifically for PKM
+pkm_hits <- sig_iso %>%
+  filter(gene_name == "PKM")
+
+n_genes
+pkm_hits
+
+
+```
+
+```{r DTU_plots, setup, echo=TRUE, message=FALSE, warning=FALSE}
+subset_obj <- obj
+# plotting the swich genes expression on UMAP
+features <- rownames(subset_obj@assays$iso@features)
+
+gene <- "MECP2"
+plot_features_list <- grep(paste0("(^|-|\\b)", gene, "($|\\b)"), features, value = TRUE)
+FeaturePlot(subset_obj, features = head(plot_features_list, 12), reduction = "umap.harm") 
+FeaturePlot(subset_obj, features =gene, reduction = "umap.harm") 
+
+
+```
+
+
+
+```

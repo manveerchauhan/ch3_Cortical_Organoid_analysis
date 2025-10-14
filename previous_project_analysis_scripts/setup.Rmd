@@ -1,0 +1,104 @@
+---
+site: workflowr::wflow_site
+title: "setup"
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: textmate
+---
+
+
+```{r setup, echo=FALSE}
+library(rtracklayer)
+library(Seurat)
+library(DropletUtils)
+library(gridExtra)
+library(data.table)
+library(BiocParallel)
+library(celda)
+library(SingleCellExperiment)
+library(DoubletFinder)
+library(stringr)
+library(cowplot)
+library(grid)
+library(patchwork)
+library(tidyverse)
+library(ORFik)
+library(GenomicFeatures)
+library(Gviz)
+library(BSgenome.Hsapiens.UCSC.hg38)
+```
+
+```{r, echo=FALSE}
+
+# Required functions for setup files
+source("code/utils.R")
+```
+
+
+```{r echo=TRUE, eval=FALSE}
+# The FLAMES ref can be found in your selected output folder after running the Flames pipeline. 
+FLAMES_gtf_file <- "/data/scratch/users/yairp/Kolf2.1_FLAMESv2/outs/Bambu_NDR_0.75/isoform_annotated.gtf" #ensure file is unzipped
+reference_gtf_file <- "/data/scratch/users/yairp/FLAMES_Day55/resources/gencode.v47.annotation.gtf" # #same ref for Day55 and Multisample
+output_file <- "output/ref_file/isoform_gene_dict.csv"
+
+# Call the helper function defined in code block above to create a dictionary containing corresponding gene information for each isoform
+# This may take a few minutes 
+isoform_gene_dict <- make_isoform_gene_symbol_dict(
+  FLAMES_gtf     = FLAMES_gtf_file,
+  reference_gtf  = reference_gtf_file,
+  output_file    = output_file
+)
+```
+
+Notes:
+54006 Bambu Genes in the raw GTF file. 
+Will remove all of these in downstream analysis  
+
+
+
+```{r echo=TRUE, eval=FALSE}
+# convert Gene_id to gene symbol for all counts
+#run a loop to run this function on all count files.
+# Directory with input files
+input_dir <- "data/gene_counts/"
+output_dir <- "data/gene_counts/"
+
+# List all CSV files in the input directory
+input_files <- list.files(input_dir, pattern = "\\count.csv$", full.names = TRUE)
+
+# Initialize an empty list to store data frames
+result_list <- list()
+
+# Process each file in the directory
+total_files <- length(input_files)  # Total number of files
+
+for (i in seq_along(input_files)) {
+  file_path <- input_files[i]
+  
+  # Extract file name without extension
+  file_name <- tools::file_path_sans_ext(basename(file_path))
+  
+  # Construct the output file name
+  output_file <- file.path(output_dir, paste0(file_name, "_gene_symbol.csv"))
+  
+  # Show progress to the user
+  message(sprintf("Processing file %d of %d: %s", i, total_files, file_name))
+  
+  # Call the function with return_df = TRUE to store the result
+  result_list[[file_name]] <- convert_ENSGID_to_geneSymbol(
+    gene_count_matrix_path = file_path,
+    output_file = output_file,
+    return_df = TRUE
+  )
+}
+```
+
+note: When doing this filtering if providing the FLAMES gtf we will only include features that pass the Bambu filtering step. This means that genesybmbol.counts file will be smaller than the raw gene.csv file. inspecting this i think this can exclude more than 5,000 features but assigned counts to these features is low. <1% or total counts. If this is a concern provide the unfiltered flames.gtf
+
+
+
+
+

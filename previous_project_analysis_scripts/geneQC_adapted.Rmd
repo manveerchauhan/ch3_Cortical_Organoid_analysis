@@ -1,0 +1,390 @@
+---
+site: workflowr::wflow_site
+title: "Gene QC - Cortical Organoid Project"
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: textmate
+    code_folding: show
+---
+
+# Gene Quality Control for Cortical Organoid Differentiation
+
+This script performs quality control analysis on the FLAMES output for cortical organoid samples across three timepoints.
+
+```{r setup, message=TRUE, warning=TRUE, include=FALSE, paged.print=TRUE}
+library(here)
+library(qs)
+library(Seurat)
+library(DropletUtils)
+library(Matrix)
+library(dplyr)
+library(ggplot2)
+library(cowplot)
+
+# Source QC functions if available
+# source(here("code","gene_QC_function.R"))
+```
+
+## Project Configuration
+
+```{r config}
+# FLAMES output directory for current project
+FLAMES_OUTPUT_DIR <- "/data/gpfs/projects/punim2251/Neurodevelopmental_Models/Cortical_Org_Diff/flame_outs_standard_ref"
+
+# Sample information
+sample_metadata <- data.frame(
+  sample_id = c("org_1A", "org_1B", "org_3A", "org_3B", "org_3C", "org_6A", "org_6B", "org_6C"),
+  timepoint = c("1M_Org", "1M_Org", "3M_Org", "3M_Org", "3M_Org", "6M_Org", "6M_Org", "6M_Org"),
+  timepoint_days = c(30, 30, 90, 90, 90, 180, 180, 180),
+  replicate = c("A", "B", "A", "B", "C", "A", "B", "C"),
+  stringsAsFactors = FALSE
+)
+```
+
+## Load FLAMES Count Data
+
+```{r load_data, message=FALSE, warning=FALSE, include=TRUE, echo=TRUE}
+# Function to load FLAMES 10X format data
+load_flames_10x <- function(flames_dir, sample_id) {
+  mtx_file <- file.path(flames_dir, paste0(sample_id, ".count.mtx"))
+  barcodes_file <- file.path(flames_dir, paste0(sample_id, ".barcodes.txt"))
+  features_file <- file.path(flames_dir, paste0(sample_id, ".features.txt"))
+
+  # Check if files exist
+  if (!all(file.exists(c(mtx_file, barcodes_file, features_file)))) {
+    stop(paste("Missing files for sample", sample_id))
+  }
+
+  # Read the count matrix
+  counts <- readMM(mtx_file)
+
+  # Read barcodes and features
+  barcodes <- read.table(barcodes_file, header = FALSE, stringsAsFactors = FALSE)$V1
+  features <- read.table(features_file, header = FALSE, stringsAsFactors = FALSE)$V1
+
+  # Set row and column names
+  rownames(counts) <- features
+  colnames(counts) <- barcodes
+
+  return(counts)
+}
+
+# Load all samples into a list
+count_matrices <- list()
+for (sample in sample_metadata$sample_id) {
+  message(sprintf("Loading sample: %s", sample))
+  tryCatch({
+    count_matrices[[sample]] <- load_flames_10x(FLAMES_OUTPUT_DIR, sample)
+    message(sprintf("Loaded %s: %d features x %d cells",
+                   sample, nrow(count_matrices[[sample]]), ncol(count_matrices[[sample]])))
+  }, error = function(e) {
+    warning(sprintf("Failed to load sample %s: %s", sample, e$message))
+  })
+}
+```
+
+## Quality Control Metrics
+
+```{r qc_metrics}
+# Calculate basic QC metrics for each sample
+qc_metrics <- data.frame()
+
+for (sample in names(count_matrices)) {
+  counts <- count_matrices[[sample]]
+
+  # Basic metrics
+  n_features <- nrow(counts)
+  n_cells <- ncol(counts)
+  total_counts <- sum(counts)
+
+  # Per-cell metrics
+  cells_total_counts <- Matrix::colSums(counts)
+  cells_n_features <- Matrix::colSums(counts > 0)
+
+  # Per-feature metrics
+  features_total_counts <- Matrix::rowSums(counts)
+  features_n_cells <- Matrix::rowSums(counts > 0)
+
+  # Summary statistics
+  metrics <- data.frame(
+    sample_id = sample,
+    n_features = n_features,
+    n_cells = n_cells,
+    total_counts = total_counts,
+    median_counts_per_cell = median(cells_total_counts),
+    median_features_per_cell = median(cells_n_features),
+    features_detected_in_gt_1_cell = sum(features_n_cells > 1),
+    features_detected_in_gt_10_cells = sum(features_n_cells > 10),
+    stringsAsFactors = FALSE
+  )
+
+  qc_metrics <- rbind(qc_metrics, metrics)
+}
+
+# Add timepoint information
+qc_metrics <- merge(qc_metrics, sample_metadata, by = "sample_id")
+print(qc_metrics)
+```
+
+## Visualization of QC Metrics
+
+```{r qc_plots, fig.width=15, fig.height=10}
+# Plot 1: Number of cells vs features
+p1 <- ggplot(qc_metrics, aes(x = n_cells, y = n_features, color = timepoint, label = sample_id)) +
+  geom_point(size = 3) +
+  geom_text_repel(vjust = -0.5) +
+  labs(title = "Features vs Cells by Sample",
+       x = "Number of Cells",
+       y = "Number of Features") +
+  theme_bw()
+
+# Plot 2: Total counts by timepoint
+p2 <- ggplot(qc_metrics, aes(x = timepoint, y = total_counts, fill = timepoint)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2) +
+  labs(title = "Total Counts by Timepoint",
+       x = "Timepoint",
+       y = "Total Counts") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Plot 3: Median counts per cell
+p3 <- ggplot(qc_metrics, aes(x = timepoint, y = median_counts_per_cell, fill = timepoint)) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2) +
+  labs(title = "Median Counts per Cell",
+       x = "Timepoint",
+       y = "Median Counts per Cell") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Plot 4: Features detected across cells
+p4 <- ggplot(qc_metrics, aes(x = sample_id, y = features_detected_in_gt_10_cells, fill = timepoint)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Features Detected in >10 Cells",
+       x = "Sample",
+       y = "Number of Features") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Combine plots
+plot_grid(p1, p2, p3, p4, ncol = 2, nrow = 2)
+```
+
+## Per-Sample Detailed QC
+
+### Sample org_1A (1 Month, Replicate A)
+```{r org_1A_qc, echo = TRUE, message = FALSE, warning = FALSE, fig.show = 'show'}
+if ("org_1A" %in% names(count_matrices)) {
+  sample_id <- "org_1A"
+  counts <- count_matrices[[sample_id]]
+
+  # Calculate per-cell metrics
+  cells_total_counts <- Matrix::colSums(counts)
+  cells_n_features <- Matrix::colSums(counts > 0)
+
+  # Calculate mitochondrial gene percentage (if MT genes are present)
+  mt_genes <- grep("^MT-", rownames(counts), value = TRUE)
+  if (length(mt_genes) > 0) {
+    cells_mt_counts <- Matrix::colSums(counts[mt_genes, ])
+    cells_mt_percent <- cells_mt_counts / cells_total_counts * 100
+  } else {
+    cells_mt_percent <- rep(0, ncol(counts))
+  }
+
+  # Create QC plots
+  qc_data <- data.frame(
+    total_counts = cells_total_counts,
+    n_features = cells_n_features,
+    mt_percent = cells_mt_percent
+  )
+
+  # Histogram of total counts
+  p1 <- ggplot(qc_data, aes(x = total_counts)) +
+    geom_histogram(bins = 50, fill = "lightblue", alpha = 0.7) +
+    labs(title = paste(sample_id, "- Total Counts per Cell"),
+         x = "Total Counts", y = "Number of Cells") +
+    theme_bw()
+
+  # Histogram of features
+  p2 <- ggplot(qc_data, aes(x = n_features)) +
+    geom_histogram(bins = 50, fill = "lightgreen", alpha = 0.7) +
+    labs(title = paste(sample_id, "- Features per Cell"),
+         x = "Number of Features", y = "Number of Cells") +
+    theme_bw()
+
+  # Scatter plot: counts vs features
+  p3 <- ggplot(qc_data, aes(x = total_counts, y = n_features)) +
+    geom_point(alpha = 0.6) +
+    labs(title = paste(sample_id, "- Counts vs Features"),
+         x = "Total Counts", y = "Number of Features") +
+    theme_bw()
+
+  # MT percentage if available
+  p4 <- ggplot(qc_data, aes(x = mt_percent)) +
+    geom_histogram(bins = 50, fill = "salmon", alpha = 0.7) +
+    labs(title = paste(sample_id, "- Mitochondrial %"),
+         x = "Mitochondrial %", y = "Number of Cells") +
+    theme_bw()
+
+  plot_grid(p1, p2, p3, p4, ncol = 2, nrow = 2)
+
+  # Print summary statistics
+  cat(sprintf("\\n%s Summary:\\n", sample_id))
+  cat(sprintf("Cells: %d\\n", ncol(counts)))
+  cat(sprintf("Features: %d\\n", nrow(counts)))
+  cat(sprintf("Median counts/cell: %.0f\\n", median(cells_total_counts)))
+  cat(sprintf("Median features/cell: %.0f\\n", median(cells_n_features)))
+  if (length(mt_genes) > 0) {
+    cat(sprintf("Median MT%%: %.2f\\n", median(cells_mt_percent)))
+  }
+}
+```
+
+### Sample org_3A (3 Month, Replicate A)
+```{r org_3A_qc, echo = TRUE, message = FALSE, warning = FALSE, fig.show = 'show'}
+if ("org_3A" %in% names(count_matrices)) {
+  sample_id <- "org_3A"
+  counts <- count_matrices[[sample_id]]
+
+  # Similar analysis as org_1A
+  cells_total_counts <- Matrix::colSums(counts)
+  cells_n_features <- Matrix::colSums(counts > 0)
+
+  mt_genes <- grep("^MT-", rownames(counts), value = TRUE)
+  if (length(mt_genes) > 0) {
+    cells_mt_counts <- Matrix::colSums(counts[mt_genes, ])
+    cells_mt_percent <- cells_mt_counts / cells_total_counts * 100
+  } else {
+    cells_mt_percent <- rep(0, ncol(counts))
+  }
+
+  qc_data <- data.frame(
+    total_counts = cells_total_counts,
+    n_features = cells_n_features,
+    mt_percent = cells_mt_percent
+  )
+
+  # Create plots (same structure as org_1A)
+  p1 <- ggplot(qc_data, aes(x = total_counts)) +
+    geom_histogram(bins = 50, fill = "lightblue", alpha = 0.7) +
+    labs(title = paste(sample_id, "- Total Counts per Cell")) +
+    theme_bw()
+
+  p2 <- ggplot(qc_data, aes(x = n_features)) +
+    geom_histogram(bins = 50, fill = "lightgreen", alpha = 0.7) +
+    labs(title = paste(sample_id, "- Features per Cell")) +
+    theme_bw()
+
+  p3 <- ggplot(qc_data, aes(x = total_counts, y = n_features)) +
+    geom_point(alpha = 0.6) +
+    labs(title = paste(sample_id, "- Counts vs Features")) +
+    theme_bw()
+
+  p4 <- ggplot(qc_data, aes(x = mt_percent)) +
+    geom_histogram(bins = 50, fill = "salmon", alpha = 0.7) +
+    labs(title = paste(sample_id, "- Mitochondrial %")) +
+    theme_bw()
+
+  plot_grid(p1, p2, p3, p4, ncol = 2, nrow = 2)
+
+  cat(sprintf("\\n%s Summary:\\n", sample_id))
+  cat(sprintf("Cells: %d\\n", ncol(counts)))
+  cat(sprintf("Features: %d\\n", nrow(counts)))
+  cat(sprintf("Median counts/cell: %.0f\\n", median(cells_total_counts)))
+  cat(sprintf("Median features/cell: %.0f\\n", median(cells_n_features)))
+}
+```
+
+### Sample org_6A (6 Month, Replicate A)
+```{r org_6A_qc, echo = TRUE, message = FALSE, warning = FALSE, fig.show = 'show'}
+if ("org_6A" %in% names(count_matrices)) {
+  sample_id <- "org_6A"
+  counts <- count_matrices[[sample_id]]
+
+  cells_total_counts <- Matrix::colSums(counts)
+  cells_n_features <- Matrix::colSums(counts > 0)
+
+  mt_genes <- grep("^MT-", rownames(counts), value = TRUE)
+  if (length(mt_genes) > 0) {
+    cells_mt_counts <- Matrix::colSums(counts[mt_genes, ])
+    cells_mt_percent <- cells_mt_counts / cells_total_counts * 100
+  } else {
+    cells_mt_percent <- rep(0, ncol(counts))
+  }
+
+  qc_data <- data.frame(
+    total_counts = cells_total_counts,
+    n_features = cells_n_features,
+    mt_percent = cells_mt_percent
+  )
+
+  p1 <- ggplot(qc_data, aes(x = total_counts)) +
+    geom_histogram(bins = 50, fill = "lightblue", alpha = 0.7) +
+    labs(title = paste(sample_id, "- Total Counts per Cell")) +
+    theme_bw()
+
+  p2 <- ggplot(qc_data, aes(x = n_features)) +
+    geom_histogram(bins = 50, fill = "lightgreen", alpha = 0.7) +
+    labs(title = paste(sample_id, "- Features per Cell")) +
+    theme_bw()
+
+  p3 <- ggplot(qc_data, aes(x = total_counts, y = n_features)) +
+    geom_point(alpha = 0.6) +
+    labs(title = paste(sample_id, "- Counts vs Features")) +
+    theme_bw()
+
+  p4 <- ggplot(qc_data, aes(x = mt_percent)) +
+    geom_histogram(bins = 50, fill = "salmon", alpha = 0.7) +
+    labs(title = paste(sample_id, "- Mitochondrial %")) +
+    theme_bw()
+
+  plot_grid(p1, p2, p3, p4, ncol = 2, nrow = 2)
+
+  cat(sprintf("\\n%s Summary:\\n", sample_id))
+  cat(sprintf("Cells: %d\\n", ncol(counts)))
+  cat(sprintf("Features: %d\\n", nrow(counts)))
+  cat(sprintf("Median counts/cell: %.0f\\n", median(cells_total_counts)))
+  cat(sprintf("Median features/cell: %.0f\\n", median(cells_n_features)))
+}
+```
+
+## Summary and Recommendations
+
+```{r summary}
+# Create summary table
+summary_table <- qc_metrics %>%
+  arrange(timepoint_days, replicate) %>%
+  select(sample_id, timepoint, n_cells, n_features, median_counts_per_cell,
+         median_features_per_cell, features_detected_in_gt_10_cells)
+
+knitr::kable(summary_table, caption = "QC Summary for All Samples")
+
+# Recommendations based on QC metrics
+cat("\\n=== QC Recommendations ===\\n")
+cat("1. Check samples with unusually low cell counts or feature detection\\n")
+cat("2. Consider filtering thresholds based on count and feature distributions\\n")
+cat("3. Examine mitochondrial gene percentages for cell viability assessment\\n")
+cat("4. Proceed with integration analysis using samples that pass QC\\n")
+```
+
+## Export Data for Next Steps
+
+```{r export_data, echo=TRUE, eval=FALSE}
+# Save count matrices and QC metrics for downstream analysis
+output_dir <- here("output", "qc_results")
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Save QC metrics
+write.csv(qc_metrics, file.path(output_dir, "qc_metrics_summary.csv"), row.names = FALSE)
+
+# Save count matrices as RDS for faster loading
+saveRDS(count_matrices, file.path(output_dir, "count_matrices_all_samples.rds"))
+
+cat("Data exported to:", output_dir, "\\n")
+```
+
+This analysis provides comprehensive quality control assessment of the FLAMES output data for the cortical organoid differentiation project. The next step would be integration analysis combining all timepoints.

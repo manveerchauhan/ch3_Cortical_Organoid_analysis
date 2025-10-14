@@ -1,0 +1,129 @@
+---
+site: workflowr::wflow_site
+title: "PKM"
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: textmate
+    code_folding: show
+---
+
+
+# PKM 
+```{r setup, include=FALSE}
+library(Seurat)
+```
+
+# Plots for PKM switch
+
+```{r}
+source(here("code", "plot_isoforms_exp_umap.R"))
+
+plot_isoforms_exp_umap(
+  obj       = obj_day55,
+  gene      = "PKM",
+  reduction = "umap",
+  slot      = "data",
+  n_features = 2  # Optional: limit to top 5 isoforms
+)
+
+plot_isoforms_exp_umap_publication(
+  obj = obj, gene = "PKM", assay = "iso", slot = "data",
+  reduction = "umap.harm",
+  n_features = 2,
+  title = "Isoform-level UMAP for PKM",
+  ncol = 3,
+  pt.size = 0.2,
+  color_mode = "seurat"   # <-- key
+)
+
+plot_isoforms_exp_umap_publication(
+  obj = obj, gene = "PKM", assay = "iso", slot = "data",
+  reduction = "umap.harm",
+  n_features = 2,
+  title = "Isoform-level UMAP for PKM",
+  ncol = 2,
+  pt.size = 0.2,
+  color_mode = "viridis",
+  viridis_option = "plasma"
+)
+
+plot_isoforms_exp_umap_publication(
+  obj = obj, gene = "PKM", assay = "iso", slot = "data",
+  reduction = "umap.harm",
+  n_features = 2,
+  title = "Isoform-level UMAP for PKM",
+  ncol = 2,
+  pt.size = 0.2,
+  color_mode = "custom",
+)
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+source(here("code", "plotIsoformPie.R"))
+
+plotIsoformPie(long_data, gene = "PKM", top_n = 4, ncol = 3)
+
+plotIsoformPieFromSeurat(
+  seurat_obj = obj,
+  gene = "PKM",
+  top_n = 3,
+  ncol = 5,
+  assay = "iso",
+  slot = "data",
+  cell_type_col = "Day"
+)
+
+```
+
+
+```{r}
+
+# Make sure iso assay is active
+DefaultAssay(obj) <- "iso"
+
+# pull counts (rows = isoforms, cols = cells)
+mat_iso <- GetAssayData(obj, assay = "iso", slot = "counts")
+
+# ---- step 1. identify all PKM isoforms ----
+pkm_isoforms <- grep("^.*-PKM$", rownames(mat_iso), value = TRUE)
+
+# ---- step 2. sum counts across all PKM isoforms (per cell, or global) ----
+total_pkm_counts <- sum(mat_iso[pkm_isoforms, , drop = FALSE])
+
+# ---- step 3. get counts for your isoform ----
+iso_id <- "BambuTx13041-PKM"
+if (!iso_id %in% rownames(mat_iso)) {
+  stop(paste("Isoform", iso_id, "not found in rownames"))
+}
+iso_counts <- sum(mat_iso[iso_id, ])
+
+# ---- step 4. proportion ----
+prop <- iso_counts / total_pkm_counts
+prop
+
+
+
+```
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+```{r}
+source(here("code", "plot_dominant_isoform.R"))
+PKM_dom_iso <- plot_dominant_isoform(obj,
+                      genes = "PKM",
+                      min_gene_counts = 3,
+                      reduction = "umap.harm",
+                      assay = "iso")
+
+pdf(here("output/publication_figure/PKM_dom_iso.pdf"), width = 10, height = 4)
+PKM_dom_iso
+dev.off()
+```

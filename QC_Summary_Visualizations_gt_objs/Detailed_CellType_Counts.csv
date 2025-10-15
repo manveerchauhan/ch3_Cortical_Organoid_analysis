@@ -1,0 +1,27 @@
+"CellType","1M","3M","6M"
+"aRG/Outer radial glia",209,0,0
+"Newborn DL PN",160,0,0
+"aRG (cycling progenitors)",486,113,0
+"Intermediate Progenitors (IP)",106,0,0
+"Preplate/Subplate neurons",598,0,0
+"unknown",45,0,0
+"apical radial glia (aRG)",269,0,0
+"Cortical hem",186,0,0
+"Deep Layer projection neurons (DL PN)",190,0,0
+"Cajal Retzius Cells",22,0,0
+"Subcortical progenitors",93,0,0
+"Outer radial glia (oRG)",0,228,0
+"IP",0,444,146
+"Callosal projection neurons (CPN)",0,1232,0
+"CFuPN",0,431,0
+"Corticofugal projection neurons (CFuPN) (likely CthPN)",0,865,0
+"CFuPN (likely SCPN)",0,325,0
+"Projection neurons (PN)",0,438,0
+"cortical hem",0,44,0
+"Interneurons (IN)",0,0,947
+"CPN",0,0,374
+"Astroglia",0,0,106
+"oRG/Astroglia",0,0,647
+"oRG/Oligo progenitors (cycling)",0,0,106
+"oRG (cycling progenitors)",0,0,256
+"Oligo progenitors",0,0,83
